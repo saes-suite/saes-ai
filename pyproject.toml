@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "saes-ai"
+version = "0.1.0"
+description = "AI Agent, Chat Assistant, and Model Context Protocol (MCP) server for SAES"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "SAES Team" }
+]
+dependencies = [
+    "saes>=0.1.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+providers = [
+    "anthropic>=0.20.0",
+    "openai>=1.0.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "httpx>=0.27.0",
+    "anthropic>=0.20.0",
+    "openai>=1.0.0",
+]
+
+[project.scripts]
+saes-mcp = "saes_ai.mcp.server:main"
+saes-ai-api = "saes_ai.server.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/saes_ai"]
+
+[tool.uv.sources]
+saes = { path = "../saes", editable = true }
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --cov=saes_ai --cov-report=term-missing"
