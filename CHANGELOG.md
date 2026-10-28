@@ -13,5 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model Context Protocol (MCP) server (`saes-mcp`) exposing SAES statistical routines to external agents.
 - Claude Desktop plugin definitions and manifests.
 - FastAPI REST & SSE streaming endpoints for AI chat, Ollama daemon management, and model probing.
+- `run_ranking_analysis` MCP tool and ranking plot support (`critical-distance`, `bayesian-rank`) in `generate_distribution_plot`.
+- Global Friedman + Nemenyi CD and Bayesian posterior ranking summaries injected into `build_analysis_context`.
 
 ## [Released]

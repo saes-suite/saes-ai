@@ -2,6 +2,7 @@
 
 from saes.app.pipeline import AnalysisReport
 from saes.domain.models import Dataset
+from saes.stats.ranking import BayesianRankingTest, FriedmanNemenyiTest
 
 
 def build_analysis_context(report: AnalysisReport | None, dataset: Dataset | None = None) -> str:
@@ -27,6 +28,24 @@ def build_analysis_context(report: AnalysisReport | None, dataset: Dataset | Non
         sections.append(f"- **Problem instances ({len(instances)})**: {', '.join(instances)}")
         sections.append(f"- **Performance metrics ({len(metrics)})**: {', '.join(metrics)}")
         sections.append(f"- **Total observations**: {len(df)} rows")
+
+        if len(algorithms) >= 2:
+            sections.append("\n### Global Non-Parametric & Bayesian Algorithm Rankings")
+            for met in metrics:
+                try:
+                    cd_res = FriedmanNemenyiTest().run(df=df, metric=met, alpha=0.05)
+                    bayes_res = BayesianRankingTest().run(df=df, metric=met, rope_percent=1.0)
+                    rank_str = ", ".join(f"{r.algorithm} ({r.avg_rank:.2f})" for r in cd_res.ranks)
+                    top_bayes = bayes_res.items[0]
+                    sections.append(
+                        f"- **Metric `{met}`** ({cd_res.scope_label}): "
+                        f"Friedman χ²={cd_res.friedman_stat:.2f} (p={cd_res.friedman_p_value:.3e}), "
+                        f"Nemenyi CD={cd_res.cd:.3f} | Ranks: {rank_str} | "
+                        f"Bayesian Leader: `{top_bayes.algorithm}` (P(Best)={top_bayes.prob_best * 100:.1f}%, "
+                        f"95% CI=[{top_bayes.ci_lower:.2f}, {top_bayes.ci_upper:.2f}])"
+                    )
+                except Exception:
+                    pass
 
     if report is not None and report.cell_analyses:
         sections.append("\n### Statistical Test Results by Experimental Cell")

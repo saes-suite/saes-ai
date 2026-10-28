@@ -75,21 +75,48 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
     ),
     MCPToolSpec(
         name="generate_distribution_plot",
-        description="Generate statistical visualization (boxplot, violin, bar, ecdf) for benchmark results.",
+        description=(
+            "Generate statistical visualization (boxplot, violin, critical-distance, bayesian-rank) "
+            "for benchmark results."
+        ),
         parameters_schema={
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Path to benchmark CSV."},
                 "plot_type": {
                     "type": "string",
-                    "enum": ["boxplot", "violin", "barplot", "ecdf", "scatterplot"],
-                    "description": "Type of distribution plot to generate.",
+                    "enum": [
+                        "boxplot",
+                        "violin",
+                        "critical-distance",
+                        "bayesian-rank",
+                        "barplot",
+                        "ecdf",
+                        "scatterplot",
+                    ],
+                    "description": "Type of distribution or ranking plot to generate.",
                 },
                 "instance": {"type": "string", "description": "Problem instance identifier."},
                 "metric": {"type": "string", "description": "Metric name."},
                 "output_path": {"type": "string", "description": "File path to save the generated plot image."},
             },
-            "required": ["file_path", "plot_type", "instance", "metric"],
+            "required": ["file_path", "plot_type", "metric"],
+        },
+    ),
+    MCPToolSpec(
+        name="run_ranking_analysis",
+        description="Run Friedman + Nemenyi Critical Distance (CD) and Bayesian Posterior Ranking across algorithms.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string", "description": "Metric name to rank algorithms on."},
+                "alpha": {"type": "number", "default": 0.05},
+                "scope": {"type": "string", "enum": ["all-instances", "single-instance"], "default": "all-instances"},
+                "instance": {"type": "string", "description": "Optional problem instance if scope='single-instance'."},
+                "rope_percent": {"type": "number", "default": 1.0},
+            },
+            "required": ["file_path", "metric"],
         },
     ),
 ]
