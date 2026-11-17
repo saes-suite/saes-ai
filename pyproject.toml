@@ -12,7 +12,7 @@ authors = [
     { name = "SAES Team" }
 ]
 dependencies = [
-    "saes>=0.1.0",
+    "saesV2>=0.1.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
     "pydantic>=2.0.0",
@@ -43,7 +43,7 @@ saes-ai-api = "saes_ai.server.app:main"
 packages = ["src/saes_ai"]
 
 [tool.uv.sources]
-saes = { path = "../saes", editable = true }
+saesV2 = { path = "../saesV2", editable = true }
 
 [tool.ruff]
 line-length = 120

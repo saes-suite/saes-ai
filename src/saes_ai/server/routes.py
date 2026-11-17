@@ -6,7 +6,7 @@ import os
 from collections.abc import Generator
 from pathlib import Path
 
-import saes
+import saesV2
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
@@ -22,7 +22,7 @@ from saes_ai.server.schemas import (
 )
 
 try:
-    from saes.server.storage import get_datasets_dir
+    from saesV2.server.storage import get_datasets_dir
 except ImportError:
 
     def get_datasets_dir() -> Path:
@@ -95,20 +95,20 @@ def chat_with_agent(req: ChatRequest) -> ChatResponse:
             safe_name = Path(req.dataset_name).name
             file_path = get_datasets_dir() / safe_name
             if file_path.exists() and file_path.is_file():
-                dataset = saes.load(file_path)
-                val = saes.validate(dataset)
+                dataset = saesV2.load(file_path)
+                val = saesV2.validate(dataset)
                 if val.is_valid:
-                    report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                    report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
         except Exception:
             pass
 
     # 2. Fallback to raw csv_data string if provided and dataset was not loaded from path
     if dataset is None and req.csv_data:
         try:
-            dataset = saes.load(io.StringIO(req.csv_data))
-            val = saes.validate(dataset)
+            dataset = saesV2.load(io.StringIO(req.csv_data))
+            val = saesV2.validate(dataset)
             if val.is_valid:
-                report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
         except Exception:
             pass
 
@@ -135,19 +135,19 @@ def chat_with_agent_stream(req: ChatRequest) -> StreamingResponse:
             safe_name = Path(req.dataset_name).name
             file_path = get_datasets_dir() / safe_name
             if file_path.exists() and file_path.is_file():
-                dataset = saes.load(file_path)
-                val = saes.validate(dataset)
+                dataset = saesV2.load(file_path)
+                val = saesV2.validate(dataset)
                 if val.is_valid:
-                    report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                    report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
         except Exception:
             pass
 
     if dataset is None and req.csv_data:
         try:
-            dataset = saes.load(io.StringIO(req.csv_data))
-            val = saes.validate(dataset)
+            dataset = saesV2.load(io.StringIO(req.csv_data))
+            val = saesV2.validate(dataset)
             if val.is_valid:
-                report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
         except Exception:
             pass
 

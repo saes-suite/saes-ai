@@ -8,8 +8,8 @@ from collections.abc import Iterator
 from typing import Any
 
 import httpx
-from saes.app.pipeline import AnalysisReport
-from saes.domain.models import Dataset
+from saesV2.app.pipeline import AnalysisReport
+from saesV2.domain.models import Dataset
 
 from saes_ai.chat.context import build_analysis_context
 from saes_ai.chat.prompts import STATISTICAL_SYSTEM_PROMPT

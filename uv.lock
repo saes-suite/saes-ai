@@ -1249,55 +1249,6 @@ wheels = [
 ]
 
 [[package]]
-name = "saes"
-version = "0.1.0"
-source = { editable = "../saes" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pandas" },
-    { name = "pydantic" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "statsmodels" },
-    { name = "tabulate" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110.0" },
-    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110.0" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
-    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.7.0" },
-    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.7.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
-    { name = "numpy", specifier = ">=1.24.0" },
-    { name = "pandas", specifier = ">=2.0.0" },
-    { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "plotly", marker = "extra == 'dev'", specifier = ">=5.15.0" },
-    { name = "plotly", marker = "extra == 'viz'", specifier = ">=5.15.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic", marker = "extra == 'api'", specifier = ">=2.0.0" },
-    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "python-multipart", marker = "extra == 'api'", specifier = ">=0.0.9" },
-    { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.9" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "saes", extras = ["viz", "api", "ai"], marker = "extra == 'all'" },
-    { name = "saes-ai", marker = "extra == 'ai'", editable = "." },
-    { name = "saes-ai", marker = "extra == 'dev'", editable = "." },
-    { name = "scipy", specifier = ">=1.10.0" },
-    { name = "seaborn", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "seaborn", marker = "extra == 'viz'", specifier = ">=0.12.0" },
-    { name = "statsmodels", specifier = ">=0.14.0" },
-    { name = "tabulate", specifier = ">=0.9.0" },
-    { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.28.0" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.28.0" },
-]
-provides-extras = ["viz", "api", "ai", "dev", "all"]
-
-[[package]]
 name = "saes-ai"
 version = "0.1.0"
 source = { editable = "." }
@@ -1306,7 +1257,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-multipart" },
-    { name = "saes" },
+    { name = "saesv2" },
     { name = "uvicorn" },
 ]
 
@@ -1340,10 +1291,59 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "saes", editable = "../saes" },
+    { name = "saesv2", editable = "../saesV2" },
     { name = "uvicorn", specifier = ">=0.28.0" },
 ]
 provides-extras = ["providers", "dev"]
+
+[[package]]
+name = "saesv2"
+version = "0.1.0"
+source = { editable = "../saesV2" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "statsmodels" },
+    { name = "tabulate" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110.0" },
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110.0" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
+    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.7.0" },
+    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.7.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
+    { name = "numpy", specifier = ">=1.24.0" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "plotly", marker = "extra == 'dev'", specifier = ">=5.15.0" },
+    { name = "plotly", marker = "extra == 'viz'", specifier = ">=5.15.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic", marker = "extra == 'api'", specifier = ">=2.0.0" },
+    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "python-multipart", marker = "extra == 'api'", specifier = ">=0.0.9" },
+    { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.9" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "saes-ai", marker = "extra == 'ai'", editable = "." },
+    { name = "saes-ai", marker = "extra == 'dev'", editable = "." },
+    { name = "saesv2", extras = ["viz", "api", "ai"], marker = "extra == 'all'" },
+    { name = "scipy", specifier = ">=1.10.0" },
+    { name = "seaborn", marker = "extra == 'dev'", specifier = ">=0.12.0" },
+    { name = "seaborn", marker = "extra == 'viz'", specifier = ">=0.12.0" },
+    { name = "statsmodels", specifier = ">=0.14.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
+    { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.28.0" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.28.0" },
+]
+provides-extras = ["viz", "api", "ai", "dev", "all"]
 
 [[package]]
 name = "scipy"

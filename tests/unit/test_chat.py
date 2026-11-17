@@ -2,7 +2,7 @@
 
 import io
 
-import saes
+import saesV2
 
 from saes_ai.chat.agent import StatisticalChatAgent
 from saes_ai.chat.context import build_analysis_context
@@ -18,8 +18,8 @@ MOEAD,ZDT1,HV,2,0.665900,True
 
 
 def test_build_analysis_context() -> None:
-    dataset = saes.load(io.StringIO(SAMPLE_CSV))
-    report = saes.analyze(dataset, generate_plots=False)
+    dataset = saesV2.load(io.StringIO(SAMPLE_CSV))
+    report = saesV2.analyze(dataset, generate_plots=False)
 
     ctx = build_analysis_context(report, dataset)
     assert "ZDT1" in ctx
@@ -29,8 +29,8 @@ def test_build_analysis_context() -> None:
 
 
 def test_statistical_chat_agent_offline_queries() -> None:
-    dataset = saes.load(io.StringIO(SAMPLE_CSV))
-    report = saes.analyze(dataset, generate_plots=False)
+    dataset = saesV2.load(io.StringIO(SAMPLE_CSV))
+    report = saesV2.analyze(dataset, generate_plots=False)
 
     agent = StatisticalChatAgent(report=report, dataset=dataset)
 
@@ -53,8 +53,8 @@ def test_statistical_chat_agent_offline_queries() -> None:
 
 
 def test_statistical_chat_agent_providers_fallback() -> None:
-    dataset = saes.load(io.StringIO(SAMPLE_CSV))
-    report = saes.analyze(dataset, generate_plots=False)
+    dataset = saesV2.load(io.StringIO(SAMPLE_CSV))
+    report = saesV2.analyze(dataset, generate_plots=False)
 
     # Local AI provider (offline fallback if Ollama not running)
     local_agent = StatisticalChatAgent(
@@ -149,8 +149,8 @@ def test_stream_pull_ollama_model_empty_and_unreachable() -> None:
 
 
 def test_statistical_chat_agent_stream_ask() -> None:
-    dataset = saes.load(io.StringIO(SAMPLE_CSV))
-    report = saes.analyze(dataset, generate_plots=False)
+    dataset = saesV2.load(io.StringIO(SAMPLE_CSV))
+    report = saesV2.analyze(dataset, generate_plots=False)
 
     agent = StatisticalChatAgent(report=report, dataset=dataset, provider="offline")
     tokens = list(agent.stream_ask("Why was this statistical test chosen?"))

@@ -1,8 +1,8 @@
 """Context generator for formatting statistical reports and datasets into prompts."""
 
-from saes.app.pipeline import AnalysisReport
-from saes.domain.models import Dataset
-from saes.stats.ranking import BayesianRankingTest, FriedmanNemenyiTest
+from saesV2.app.pipeline import AnalysisReport
+from saesV2.domain.models import Dataset
+from saesV2.stats.ranking import BayesianRankingTest, FriedmanNemenyiTest
 
 
 def build_analysis_context(report: AnalysisReport | None, dataset: Dataset | None = None) -> str:
