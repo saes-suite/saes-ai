@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Desktop plugin definitions and manifests.
 - FastAPI REST & SSE streaming endpoints for AI chat, Ollama daemon management, and model probing.
 - `run_ranking_analysis` MCP tool and ranking plot support (`critical-distance`, `bayesian-rank`) in `generate_distribution_plot`.
+- `generate_benchmark_table` and `explore_dataset_distributions` MCP tools for ANOVA/Friedman/Wilcoxon table generation and normality/test recommendation profiling.
 - Global Friedman + Nemenyi CD and Bayesian posterior ranking summaries injected into `build_analysis_context`.
 
 ## [Released]

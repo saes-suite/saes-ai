@@ -119,4 +119,65 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
             "required": ["file_path", "metric"],
         },
     ),
+    MCPToolSpec(
+        name="generate_benchmark_table",
+        description=(
+            "Generate publication-grade ANOVA, Friedman, Wilcoxon, Kruskal-Wallis, or Pairwise statistical "
+            "benchmark tables with LaTeX, CSV, Markdown, PDF, and DOCX exports."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string", "description": "Metric name."},
+                "table_type": {
+                    "type": "string",
+                    "enum": ["instance_algorithm", "pairwise_matrix", "omnibus_posthoc"],
+                    "default": "instance_algorithm",
+                },
+                "test_type": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "wilcoxon",
+                        "mann_whitney",
+                        "friedman",
+                        "kruskal",
+                        "anova_oneway",
+                        "anova_welch",
+                        "ttest_welch",
+                        "ttest_ind",
+                        "ttest_rel",
+                    ],
+                    "default": "auto",
+                },
+                "posthoc_correction": {
+                    "type": "string",
+                    "enum": ["holm", "bonferroni", "hochberg", "fdr_bh", "none"],
+                    "default": "holm",
+                },
+                "reference_algorithm": {"type": "string", "description": "Control/reference algorithm name."},
+                "alpha": {"type": "number", "default": 0.05},
+            },
+            "required": ["file_path", "metric"],
+        },
+    ),
+    MCPToolSpec(
+        name="explore_dataset_distributions",
+        description=(
+            "Explore dataset observations, reveal multi-metric pivots, evaluate normality (Shapiro-Wilk, "
+            "D'Agostino, KS) and homoscedasticity (Levene, Bartlett), and get smart statistical test recommendations."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metrics": {"type": "array", "items": {"type": "string"}},
+                "algorithms": {"type": "array", "items": {"type": "string"}},
+                "instances": {"type": "array", "items": {"type": "string"}},
+                "alpha": {"type": "number", "default": 0.05},
+            },
+            "required": ["file_path"],
+        },
+    ),
 ]
