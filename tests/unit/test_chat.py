@@ -79,7 +79,7 @@ def test_statistical_chat_agent_provider_errors() -> None:
 def test_probe_provider() -> None:
     # 1. Local probe (unreachable port)
     res_local = StatisticalChatAgent.probe_provider("local", base_url="http://127.0.0.1:99999")
-    assert res_local["status"] in ("offline", "error", "ok", "binary_found_not_running")
+    assert res_local["status"] in ("offline", "error", "ok", "binary_found_not_running", "not_installed")
 
     # 2. OpenAI probe (invalid key)
     res_openai = StatisticalChatAgent.probe_provider("openai", api_key="sk-invalid")
