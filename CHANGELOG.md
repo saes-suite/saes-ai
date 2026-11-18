@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Resolved `__version__` dynamically from package metadata (`importlib.metadata`) with `version.txt` fallback across `saes_ai`, FastAPI `/health`, and `SAESMCPServer`.
+- Updated `scripts/release_stamp.js` and `.github/workflows/release.yml` to automatically bump `src/saes_ai/plugins/claude/plugin.json` during releases.
+- Added SAES logo and updated `README.md` and `Makefile` `.PHONY` targets.
+
 ## [Released]
 
 ## [0.2.0] — 2026-11-18 (@rorro6787)

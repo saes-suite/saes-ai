@@ -8,15 +8,16 @@ Implementation is planned for the MCP integration phase.
 
 from typing import Any
 
+from saes_ai._version import __version__
 from saes_ai.mcp.tools import SAES_MCP_TOOLS
 
 
 class SAESMCPServer:
     """Model Context Protocol server exposing SAES statistical routines to LLMs."""
 
-    def __init__(self, name: str = "saes-mcp", version: str = "0.1.0") -> None:
+    def __init__(self, name: str = "saes-mcp", version: str | None = None) -> None:
         self.name = name
-        self.version = version
+        self.version = version if version is not None else __version__
         self.tools = SAES_MCP_TOOLS
 
     def list_tools(self) -> list[dict[str, Any]]:

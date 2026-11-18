@@ -90,6 +90,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add version.txt CHANGELOG.md pyproject.toml
+          if [ -f src/saes_ai/plugins/claude/plugin.json ]; then git add src/saes_ai/plugins/claude/plugin.json; fi
           if [ -f uv.lock ]; then git add uv.lock; fi
           RELEASE_VERSION=$(cat version.txt | sed 's/-SNAPSHOT//')
           git commit -m "Setting release v${RELEASE_VERSION} from ${{ steps.bump.outputs.branch }} [skip ci]"

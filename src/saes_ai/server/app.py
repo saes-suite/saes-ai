@@ -36,12 +36,14 @@ def configure_logging(level: str | None = None) -> None:
 
 def create_app() -> FastAPI:
     """Create and configure standalone SAES-AI FastAPI application."""
+    from saes_ai._version import __version__
+
     configure_logging()
 
     app = FastAPI(
         title="SAES-AI REST API",
         description="Stochastic Algorithm Evaluation Suite - AI Intelligence & Conversational Assistant Server",
-        version="0.1.0",
+        version=__version__,
     )
 
     app.add_middleware(
@@ -74,7 +76,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "saes-ai-api", "version": "0.1.0"}
+        return {"status": "ok", "service": "saes-ai-api", "version": __version__}
 
     app.include_router(chat_router)
     return app
