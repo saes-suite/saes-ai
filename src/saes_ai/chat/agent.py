@@ -1,10 +1,16 @@
+"""Agentic statistical consultant for SAES-AI with native tool calling."""
+
+from __future__ import annotations
+
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -13,20 +19,125 @@ from saesV2.domain.models import Dataset
 
 from saes_ai.chat.context import build_analysis_context
 from saes_ai.chat.prompts import STATISTICAL_SYSTEM_PROMPT
+from saes_ai.chat.tools import SAES_AGENT_TOOLS, ToolContext, execute_tool
+
+logger = logging.getLogger(__name__)
+
+MAX_TOOL_ITERATIONS = 8
+MAX_TOOL_RESULT_CHARS = 12000
+DEFAULT_OLLAMA_NUM_CTX = 16384
+
+
+def _get_ollama_num_ctx() -> int:
+    """Return configured Ollama context window size, defaulting to DEFAULT_OLLAMA_NUM_CTX."""
+    raw = os.getenv("SAES_OLLAMA_NUM_CTX", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return DEFAULT_OLLAMA_NUM_CTX
+
+
+def _sanitize_error_message(exc: Exception) -> str:
+    """Redact API keys from exception strings before displaying to users."""
+    return re.sub(r"([?&]key=)[^&\s'\"]+", r"\1***", str(exc))
+
+
+def _extract_think_blocks(text: str) -> tuple[str | None, str]:
+    """Extract <think>...</think> reasoning blocks from model text, returning (thought, clean_text)."""
+    thoughts: list[str] = []
+
+    def _collect(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        if inner:
+            thoughts.append(inner)
+        return ""
+
+    clean = re.sub(r"<think>(.*?)</think>", _collect, text, flags=re.DOTALL)
+    # Also extract an unclosed trailing <think> block (e.g. when truncated mid-thought).
+    clean = re.sub(r"<think>(.*)$", _collect, clean, flags=re.DOTALL).strip()
+    return ("\n\n".join(thoughts) if thoughts else None), clean
+
+
+def _post_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_payload: dict[str, Any],
+    max_retries: int = 2,
+) -> httpx.Response:
+    """POST with brief retry on transient 429/503 provider overload errors."""
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    last_res: httpx.Response | None = None
+    for attempt in range(max_retries + 1):
+        res = client.post(url, headers=headers, json=json_payload)
+        last_res = res
+        if res.status_code not in (429, 503) or attempt == max_retries:
+            res.raise_for_status()
+            return res
+        if not is_test:
+            time.sleep(0.8 * (attempt + 1))
+    assert last_res is not None
+    last_res.raise_for_status()
+    return last_res
+
+
+def _default_datasets_dir() -> Path:
+    custom_dir = os.getenv("SAES_DATASETS_DIR")
+    if custom_dir:
+        p = Path(custom_dir).resolve()
+    else:
+        p = Path.cwd() / "datasets"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _truncate_tool_result(result: dict[str, Any]) -> str:
+    raw = json.dumps(result, default=str)
+    if len(raw) <= MAX_TOOL_RESULT_CHARS:
+        return raw
+    return raw[: MAX_TOOL_RESULT_CHARS - 32] + '... [truncated for brevity]"}'
+
+
+def _summarize_tool_result(name: str, result: dict[str, Any]) -> str:
+    if not result.get("ok", True):
+        return f"Error: {result.get('error', 'unknown error')}"
+    if name == "list_datasets":
+        return f"Found {result.get('datasets_count', 0)} dataset(s)"
+    if name == "inspect_dataset":
+        status = "valid" if result.get("is_valid") else f"{result.get('error_count', 0)} error(s)"
+        return f"{result.get('filename', 'dataset')}: {result.get('row_count', 0)} rows ({status})"
+    if name == "edit_dataset":
+        status = "valid" if result.get("is_valid") else f"{result.get('error_count', 0)} error(s)"
+        return f"Edited {result.get('filename', 'dataset')} ({status})"
+    if name == "create_dataset":
+        return f"Created {result.get('filename', 'dataset')} ({result.get('row_count', 0)} rows)"
+    if name == "get_dataset_kpis":
+        return f"KPIs for {result.get('filename', 'dataset')} ({result.get('total_rows', 0)} rows)"
+    if name == "explore_dataset":
+        return f"Normality passed {result.get('normality_passed_count', 0)}/{result.get('normality_total_checks', 0)}"
+    if name == "run_statistical_analysis":
+        return f"{result.get('significant_cells_count', 0)}/{result.get('cells_count', 0)} significant cells"
+    if name == "navigate_ui":
+        act = result.get("action", {})
+        tab = f"/{act['tab']}" if act.get("tab") else ""
+        return f"Navigated UI to {act.get('view', 'visualize')}{tab}"
+    return "Completed"
 
 
 class StatisticalChatAgent:
-    """Conversational assistant for interpreting SAES statistical evaluation results."""
+    """Agentic conversational assistant for SAES dataset management, analysis, and UI control."""
 
     def __init__(
         self,
         report: AnalysisReport | None = None,
         dataset: Dataset | None = None,
         system_prompt: str = STATISTICAL_SYSTEM_PROMPT,
-        provider: str = "offline",
+        provider: str = "local",
         model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        tool_context: ToolContext | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> None:
         self.report = report
         self.dataset = dataset
@@ -35,7 +146,8 @@ class StatisticalChatAgent:
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
-        self.history: list[dict[str, str]] = []
+        self.tool_context = tool_context or ToolContext(datasets_dir=_default_datasets_dir())
+        self.history: list[dict[str, str]] = list(history) if history else []
 
     def set_context(self, report: AnalysisReport | None, dataset: Dataset | None = None) -> None:
         """Update current statistical context."""
@@ -43,539 +155,671 @@ class StatisticalChatAgent:
         if dataset is not None:
             self.dataset = dataset
 
-    def ask(self, query: str) -> str:
-        """Process user query against the current statistical analysis context.
+    def _build_runtime_context(self) -> str:
+        parts: list[str] = []
+        stats_ctx = build_analysis_context(self.report, self.dataset)
+        if stats_ctx and not stats_ctx.startswith("No statistical analysis"):
+            parts.append(stats_ctx)
 
-        Args:
-            query: Question or prompt from user.
+        ctx = self.tool_context
+        state_lines = ["### Active Workspace State"]
+        if ctx.active_dataset_name:
+            state_lines.append(f"- **Active Dataset**: `{ctx.active_dataset_name}`")
+        else:
+            state_lines.append("- **Active Dataset**: None selected")
 
-        Returns:
-            String response explaining the results or answering the question.
-        """
-        self.history.append({"role": "user", "content": query})
-        context_str = build_analysis_context(self.report, self.dataset)
+        try:
+            ctx.datasets_dir.mkdir(parents=True, exist_ok=True)
+            stored_files = sorted(p.name for p in ctx.datasets_dir.glob("*.csv") if p.is_file())
+            if stored_files:
+                state_lines.append(
+                    f"- **Datasets Available in Storage ({len(stored_files)})**: "
+                    + ", ".join(f"`{name}`" for name in stored_files[:20])
+                )
+            else:
+                state_lines.append("- **Datasets Available in Storage**: None")
+        except Exception:
+            pass
 
-        provider = (self.provider or "offline").lower().strip()
-
-        # 1. Local AI model (Ollama / LocalAI / LM Studio)
-        if provider == "local":
-            response = self._call_local(
-                query=query,
-                context=context_str,
-                model=self.model,
-                base_url=self.base_url,
+        if ctx.staged_csv is not None:
+            state_lines.append(
+                f"- **Staged Chat Upload**: `{ctx.staged_filename or 'uploaded_dataset.csv'}` "
+                f"({len(ctx.staged_csv)} chars) — call `inspect_dataset(use_staged=true)` to inspect it."
             )
-            self.history.append({"role": "assistant", "content": response})
-            return response
+        if ctx.current_view:
+            view_str = ctx.current_view + (f" (tab: `{ctx.current_tab}`)" if ctx.current_tab else "")
+            state_lines.append(f"- **Current UI View**: `{view_str}`")
+        state_lines.append(f"- **Significance Level (alpha)**: {ctx.alpha}")
+        parts.append("\n".join(state_lines))
+        return "\n\n".join(parts)
 
-        # 2. OpenAI provider
-        if provider == "openai":
-            key = self.api_key or os.getenv("OPENAI_API_KEY")
-            if key:
-                response = self._call_openai(
-                    query=query,
-                    context=context_str,
-                    api_key=key,
-                    model=self.model,
-                    base_url=self.base_url,
-                )
-            else:
-                fallback = self._offline_statistical_interpret(query, context_str)
-                response = f"[OpenAI API key missing]. Falling back to offline statistical engine:\n\n{fallback}"
-            self.history.append({"role": "assistant", "content": response})
-            return response
+    def _run_tool_and_emit(self, name: str, args: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        """Execute a tool and yield tool_call, ui_action, artifact, and tool_result events."""
+        logger.debug("Tool call --> %s args=%s", name, args)
+        t0 = time.perf_counter()
+        yield {"type": "tool_call", "tool": name, "arguments": args}
+        prev_ui_count = len(self.tool_context.ui_actions)
+        prev_art_count = len(self.tool_context.artifacts)
+        result = execute_tool(self.tool_context, name, args)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        summary = _summarize_tool_result(name, result)
+        ok = bool(result.get("ok", True))
+        new_ui = self.tool_context.ui_actions[prev_ui_count:]
+        new_arts = self.tool_context.artifacts[prev_art_count:]
+        logger.debug(
+            "Tool result <-- %s ok=%s elapsed=%.1fms ui_actions=%d artifacts=%d summary=%s",
+            name,
+            ok,
+            elapsed_ms,
+            len(new_ui),
+            len(new_arts),
+            summary,
+        )
+        self.tool_context.tool_events.append(
+            {
+                "tool": name,
+                "arguments": args,
+                "ok": ok,
+                "summary": summary,
+            }
+        )
+        for action in new_ui:
+            yield {"type": "ui_action", "action": action}
+        for artifact in new_arts:
+            yield {"type": "artifact", "artifact": artifact}
+        yield {
+            "type": "tool_result",
+            "tool": name,
+            "ok": ok,
+            "summary": summary,
+            "result": result,
+        }
 
-        # 3. Anthropic Claude provider
-        if provider == "anthropic":
-            key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
-            if key:
-                response = self._call_anthropic(
-                    query=query,
-                    context=context_str,
-                    api_key=key,
-                    model=self.model,
-                )
-            else:
-                fallback = self._offline_statistical_interpret(query, context_str)
-                response = f"[Anthropic API key missing]. Falling back to offline statistical engine:\n\n{fallback}"
-            self.history.append({"role": "assistant", "content": response})
-            return response
-
-        # 4. Google Gemini provider
-        if provider in ("gemini", "google"):
-            key = self.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if key:
-                response = self._call_gemini(
-                    query=query,
-                    context=context_str,
-                    api_key=key,
-                    model=self.model,
-                )
-            else:
-                fallback = self._offline_statistical_interpret(query, context_str)
-                response = f"[Google Gemini API key missing]. Falling back to offline statistical engine:\n\n{fallback}"
-            self.history.append({"role": "assistant", "content": response})
-            return response
-
-        # 5. Explicit Offline mode
-        if provider == "offline":
-            response = self._offline_statistical_interpret(query, context_str)
-            self.history.append({"role": "assistant", "content": response})
-            return response
-
-        # 5. Fallback auto-detection for backwards compatibility
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        if anthropic_key:
-            response = self._call_anthropic(query, context_str, anthropic_key)
-            self.history.append({"role": "assistant", "content": response})
-            return response
-
-        openai_key = os.getenv("OPENAI_API_KEY")
-        if openai_key:
-            response = self._call_openai(query, context_str, openai_key)
-            self.history.append({"role": "assistant", "content": response})
-            return response
-
-        response = self._offline_statistical_interpret(query, context_str)
-        self.history.append({"role": "assistant", "content": response})
-        return response
+    def ask(self, query: str) -> str:
+        """Process user query synchronously and return final assistant text."""
+        chunks: list[str] = []
+        for event in self.stream_events(query):
+            if event.get("type") == "token":
+                chunks.append(str(event.get("token", "")))
+        return "".join(chunks)
 
     def stream_ask(self, query: str) -> Iterator[str]:
-        """Process user query and yield response tokens iteratively.
+        """Process user query and yield response text tokens iteratively."""
+        for event in self.stream_events(query):
+            if event.get("type") == "token":
+                token = str(event.get("token", ""))
+                if token:
+                    yield token
 
-        Args:
-            query: Question or prompt from user.
-
-        Yields:
-            Token or text chunk strings as they are generated.
-        """
-        self.history.append({"role": "user", "content": query})
-        context_str = build_analysis_context(self.report, self.dataset)
-        provider = (self.provider or "offline").lower().strip()
-
+    def stream_events(self, query: str) -> Iterator[dict[str, Any]]:
+        """Run the agentic loop and yield structured events (tool_call, ui_action, token)."""
+        context_str = self._build_runtime_context()
+        provider = (self.provider or "local").lower().strip()
         chunks: list[str] = []
 
-        def _gather(gen: Iterator[str]) -> Iterator[str]:
-            for chunk in gen:
-                chunks.append(chunk)
-                yield chunk
+        def _dispatch() -> Iterator[dict[str, Any]]:
+            if provider == "local":
+                yield from self._agent_local(query, context_str)
+                return
+            if provider == "openai":
+                key = self.api_key or os.getenv("OPENAI_API_KEY")
+                if key:
+                    yield from self._agent_openai(query, context_str, api_key=key)
+                else:
+                    yield {
+                        "type": "token",
+                        "token": (
+                            "⚠️ **OpenAI API key missing.** "
+                            "Please configure your OpenAI API key in **AI Settings**."
+                        ),
+                    }
+                return
+            if provider == "anthropic":
+                key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
+                if key:
+                    yield from self._agent_anthropic(query, context_str, api_key=key)
+                else:
+                    yield {
+                        "type": "token",
+                        "token": (
+                            "⚠️ **Anthropic API key missing.** "
+                            "Please configure your Anthropic API key in **AI Settings**."
+                        ),
+                    }
+                return
+            if provider in ("gemini", "google"):
+                key = self.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if key:
+                    yield from self._agent_gemini(query, context_str, api_key=key)
+                else:
+                    yield {
+                        "type": "token",
+                        "token": (
+                            "⚠️ **Google Gemini API key missing.** "
+                            "Please configure your Gemini API key in **AI Settings**."
+                        ),
+                    }
+                return
 
-        if provider == "local":
-            gen = self._stream_local(query, context_str, model=self.model, base_url=self.base_url)
-        elif provider == "openai":
-            key = self.api_key or os.getenv("OPENAI_API_KEY")
-            if key:
-                gen = self._stream_openai(query, context_str, api_key=key, model=self.model, base_url=self.base_url)
-            else:
-                gen = self._stream_missing_key("OpenAI", query, context_str)
-        elif provider == "anthropic":
-            key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
-            if key:
-                gen = self._stream_anthropic(query, context_str, api_key=key, model=self.model)
-            else:
-                gen = self._stream_missing_key("Anthropic", query, context_str)
-        elif provider in ("gemini", "google"):
-            key = self.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if key:
-                gen = self._stream_gemini(query, context_str, api_key=key, model=self.model)
-            else:
-                gen = self._stream_missing_key("Google Gemini", query, context_str)
-        elif provider == "offline":
-            gen = self._stream_offline(query, context_str)
-        else:
+            # Fallback auto-detection when an unrecognized provider is passed
             anthropic_key = os.getenv("ANTHROPIC_API_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
             if anthropic_key:
-                gen = self._stream_anthropic(query, context_str, api_key=anthropic_key, model=self.model)
+                yield from self._agent_anthropic(query, context_str, api_key=anthropic_key)
             elif openai_key:
-                gen = self._stream_openai(query, context_str, api_key=openai_key, model=self.model)
+                yield from self._agent_openai(query, context_str, api_key=openai_key)
             else:
-                gen = self._stream_offline(query, context_str)
+                yield {
+                    "type": "token",
+                    "token": (
+                        f"⚠️ **Unsupported AI provider `{provider}`.** "
+                        "Please select Local AI (Ollama), OpenAI, Anthropic, or Gemini in **AI Settings**."
+                    ),
+                }
 
         try:
-            yield from _gather(gen)
+            logger.debug(
+                "Agent dispatch: provider=%s model=%s context_chars=%d",
+                provider,
+                self.model,
+                len(context_str),
+            )
+            t0 = time.perf_counter()
+            for ev in _dispatch():
+                if ev.get("type") == "token":
+                    chunks.append(str(ev.get("token", "")))
+                yield ev
         finally:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
             full_response = "".join(chunks)
+            logger.debug(
+                "Agent complete: provider=%s model=%s elapsed=%.1fms response_chars=%d tool_events=%d",
+                provider,
+                self.model,
+                elapsed_ms,
+                len(full_response),
+                len(self.tool_context.tool_events),
+            )
+            self.history.append({"role": "user", "content": query})
             if full_response:
                 self.history.append({"role": "assistant", "content": full_response})
 
-    def _stream_missing_key(self, provider_name: str, query: str, context: str) -> Iterator[str]:
-        prefix = f"[{provider_name} API key missing]. Falling back to offline statistical engine:\n\n"
-        yield prefix
-        yield from self._stream_offline(query, context)
+    # ------------------------------------------------------------------
+    # Text chunking helper
+    # ------------------------------------------------------------------
 
-    def _stream_offline(self, query: str, context: str) -> Iterator[str]:
-        full_text = self._offline_statistical_interpret(query, context)
-        tokens = re.split(r"(\s+)", full_text)
+    @staticmethod
+    def _emit_text_tokens(text: str) -> Iterator[dict[str, Any]]:
+        tokens = re.split(r"(\s+)", text)
         is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
-        for token in tokens:
-            if not token:
+        buf: list[str] = []
+        buf_len = 0
+        for tok in tokens:
+            if not tok:
                 continue
-            yield token
-            if not is_test:
-                time.sleep(0.003)
+            buf.append(tok)
+            buf_len += len(tok)
+            if buf_len >= 18:
+                yield {"type": "token", "token": "".join(buf)}
+                buf.clear()
+                buf_len = 0
+                if not is_test:
+                    time.sleep(0.005)
+        if buf:
+            yield {"type": "token", "token": "".join(buf)}
 
-    def _stream_local(
-        self,
-        query: str,
-        context: str,
-        model: str | None = None,
-        base_url: str | None = None,
-    ) -> Iterator[str]:
-        if not model or not model.strip():
-            yield (
-                "[No model specified for Local AI. Please connect to Ollama and select a model in Settings]. "
-                "Falling back to offline statistical engine:\n\n"
-            )
-            yield from self._stream_offline(query, context)
+    def _build_chat_messages(self, query: str, context_str: str) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
+        for h in self.history[-10:]:
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            if role in ("user", "assistant") and content:
+                msgs.append({"role": role, "content": content})
+        msgs.append({"role": "user", "content": f"{context_str}\n\nUser Request: {query}"})
+        return msgs
+
+    # ------------------------------------------------------------------
+    # 1. OpenAI & OpenAI-compatible Tool-Calling Agent Loop
+    # ------------------------------------------------------------------
+
+    def _agent_openai(self, query: str, context_str: str, api_key: str) -> Iterator[dict[str, Any]]:
+        if not self.model or not self.model.strip():
+            yield {
+                "type": "token",
+                "token": "⚠️ **No model specified for OpenAI.** Please select a model in **AI Settings**.",
+            }
             return
 
-        selected_model = model.strip()
-        clean_url = (base_url or "http://localhost:11434").rstrip("/")
-        prompt = f"{context}\n\nUser Question: {query}"
+        selected_model = self.model.strip()
+        target_url = (self.base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        messages = self._build_chat_messages(query, context_str)
+        tools_payload = [t.to_openai_tool() for t in SAES_AGENT_TOOLS]
 
         try:
-            with httpx.Client(timeout=60.0) as client:
-                if clean_url.endswith("/v1"):
-                    v1_payload: dict[str, Any] = {
+            with httpx.Client(timeout=120.0) as client:
+                for _ in range(MAX_TOOL_ITERATIONS):
+                    payload: dict[str, Any] = {
                         "model": selected_model,
-                        "stream": True,
-                        "messages": [
-                            {"role": "system", "content": self.system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
+                        "messages": messages,
+                        "tools": tools_payload,
+                        "tool_choice": "auto",
                     }
-                    with client.stream("POST", f"{clean_url}/chat/completions", json=v1_payload) as res:
-                        res.raise_for_status()
-                        for line in res.iter_lines():
-                            line = line.strip()
-                            if not line or not line.startswith("data: "):
-                                continue
-                            data_str = line[6:].strip()
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data_str)
-                                choices = chunk.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {}).get("content", "")
-                                    if delta:
-                                        yield delta
-                            except Exception:
-                                continue
-                else:
-                    ollama_payload: dict[str, Any] = {
-                        "model": selected_model,
-                        "stream": True,
-                        "messages": [
-                            {"role": "system", "content": self.system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
-                    }
-                    with client.stream("POST", f"{clean_url}/api/chat", json=ollama_payload) as res:
-                        res.raise_for_status()
-                        for line in res.iter_lines():
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                chunk = json.loads(line)
-                                msg = chunk.get("message", {})
-                                content = msg.get("content", "")
-                                if content:
-                                    yield content
-                                if chunk.get("done", False):
-                                    break
-                            except Exception:
-                                continue
-        except Exception as e:
-            yield (
-                f"[Local AI error on {clean_url} (model: {selected_model}): {e!s}]. "
-                "Ensure Ollama or your local server is running.\n\n"
-                "Falling back to offline statistical engine:\n\n"
-            )
-            yield from self._stream_offline(query, context)
+                    res = _post_with_retry(client, target_url, headers=headers, json_payload=payload)
+                    data = res.json()
+                    msg = data["choices"][0]["message"]
+                    reasoning = msg.get("reasoning_content") or msg.get("reasoning")
+                    if reasoning:
+                        yield {"type": "thought", "thought": str(reasoning).strip()}
+                    tool_calls = msg.get("tool_calls") or []
 
-    def _stream_openai(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-        base_url: str | None = None,
-    ) -> Iterator[str]:
-        if not model or not model.strip():
-            yield (
-                "[No model specified for OpenAI. Please select a model in Settings]. "
-                "Falling back to offline statistical engine:\n\n"
-            )
-            yield from self._stream_offline(query, context)
-            return
+                    if not tool_calls:
+                        raw_content = str(msg.get("content") or "")
+                        think_text, clean_content = _extract_think_blocks(raw_content)
+                        if think_text:
+                            yield {"type": "thought", "thought": think_text}
+                        yield from self._emit_text_tokens(clean_content)
+                        return
 
-        selected_model = model.strip()
-        prompt = f"{context}\n\nUser Question: {query}"
+                    if msg.get("content"):
+                        think_text, pre_text = _extract_think_blocks(str(msg["content"]))
+                        combined_thought = "\n\n".join(p for p in (think_text, pre_text) if p)
+                        if combined_thought:
+                            yield {"type": "thought", "thought": combined_thought}
 
-        try:
-            try:
-                import openai
-
-                client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
-                stream = client.chat.completions.create(
-                    model=selected_model,
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    stream=True,
-                )
-                for chunk in stream:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
-                return
-            except ImportError:
-                pass
-
-            target_url = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-            payload: dict[str, Any] = {
-                "model": selected_model,
-                "stream": True,
-                "messages": [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            }
-            with httpx.Client(timeout=60.0) as http_client:
-                with http_client.stream("POST", target_url, headers=headers, json=payload) as res:
-                    res.raise_for_status()
-                    for line in res.iter_lines():
-                        line = line.strip()
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data_str = line[6:].strip()
-                        if data_str == "[DONE]":
-                            break
+                    messages.append(msg)
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        t_name = str(fn.get("name", ""))
                         try:
-                            chunk = json.loads(data_str)
-                            choices = chunk.get("choices", [])
-                            if choices:
-                                delta = choices[0].get("delta", {}).get("content", "")
-                                if delta:
-                                    yield delta
+                            t_args = json.loads(fn.get("arguments") or "{}")
                         except Exception:
-                            continue
-        except Exception as e:
-            yield f"[OpenAI API unavailable: {e!s}]. Falling back to offline engine:\n\n"
-            yield from self._stream_offline(query, context)
+                            t_args = {}
 
-    def _stream_anthropic(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-    ) -> Iterator[str]:
-        if not model or not model.strip():
-            yield (
-                "[No model specified for Anthropic Claude. Please select a model in Settings]. "
-                "Falling back to offline statistical engine:\n\n"
-            )
-            yield from self._stream_offline(query, context)
+                        tool_res_str = "{}"
+                        for ev in self._run_tool_and_emit(t_name, t_args):
+                            if ev["type"] == "tool_result":
+                                tool_res_str = _truncate_tool_result(ev["result"])
+                            yield ev
+
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id", t_name),
+                                "content": tool_res_str,
+                            }
+                        )
+
+                yield from self._emit_text_tokens("Reached maximum tool execution steps. Please refine your request.")
+        except Exception as exc:
+            logger.exception("OpenAI API error: %s", _sanitize_error_message(exc))
+            yield {
+                "type": "token",
+                "token": f"⚠️ **OpenAI API error:** {_sanitize_error_message(exc)}",
+            }
+
+    # ------------------------------------------------------------------
+    # 2. Anthropic Claude Tool-Calling Agent Loop
+    # ------------------------------------------------------------------
+
+    def _agent_anthropic(self, query: str, context_str: str, api_key: str) -> Iterator[dict[str, Any]]:
+        if not self.model or not self.model.strip():
+            yield {
+                "type": "token",
+                "token": "⚠️ **No model specified for Anthropic.** Please select a model in **AI Settings**.",
+            }
             return
 
-        selected_model = model.strip()
-        prompt = f"{context}\n\nUser Question: {query}"
-
-        try:
-            try:
-                import anthropic
-
-                client = anthropic.Anthropic(api_key=api_key)
-                with client.messages.stream(
-                    model=selected_model,
-                    max_tokens=1000,
-                    system=self.system_prompt,
-                    messages=[{"role": "user", "content": prompt}],
-                ) as stream:
-                    for text in stream.text_stream:
-                        yield text
-                return
-            except ImportError:
-                pass
-
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload: dict[str, Any] = {
-                "model": selected_model,
-                "max_tokens": 1000,
-                "stream": True,
-                "system": self.system_prompt,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-            with httpx.Client(timeout=60.0) as http_client:
-                with http_client.stream(
-                    "POST", "https://api.anthropic.com/v1/messages", headers=headers, json=payload
-                ) as res:
-                    res.raise_for_status()
-                    for line in res.iter_lines():
-                        line = line.strip()
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data_str = line[6:].strip()
-                        try:
-                            chunk = json.loads(data_str)
-                            if chunk.get("type") == "content_block_delta":
-                                text = chunk.get("delta", {}).get("text", "")
-                                if text:
-                                    yield text
-                        except Exception:
-                            continue
-        except Exception as e:
-            yield f"[Claude API unavailable: {e!s}]. Falling back to offline engine:\n\n"
-            yield from self._stream_offline(query, context)
-
-    def _stream_gemini(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-    ) -> Iterator[str]:
-        if not model or not model.strip():
-            yield (
-                "[No model specified for Google Gemini. Please connect and select an available model in Settings]. "
-                "Falling back to offline statistical engine:\n\n"
-            )
-            yield from self._stream_offline(query, context)
-            return
-
-        selected_model = model.strip().replace("models/", "")
-        prompt = f"{context}\n\nUser Question: {query}"
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{selected_model}:streamGenerateContent?key={api_key}&alt=sse"
-        )
-        payload: dict[str, Any] = {
-            "systemInstruction": {
-                "parts": [{"text": self.system_prompt}],
-            },
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}],
-                }
-            ],
+        selected_model = self.model.strip()
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
         }
+        messages: list[dict[str, Any]] = []
+        for h in self.history[-10:]:
+            if h.get("role") in ("user", "assistant") and h.get("content"):
+                messages.append({"role": h["role"], "content": h["content"]})
+        messages.append({"role": "user", "content": f"{context_str}\n\nUser Request: {query}"})
+        tools_payload = [t.to_anthropic_tool() for t in SAES_AGENT_TOOLS]
+
         try:
-            with httpx.Client(timeout=60.0) as client:
-                with client.stream("POST", url, json=payload) as res:
-                    res.raise_for_status()
-                    for line in res.iter_lines():
-                        line = line.strip()
-                        if not line or not line.startswith("data: "):
+            with httpx.Client(timeout=120.0) as client:
+                for _ in range(MAX_TOOL_ITERATIONS):
+                    payload: dict[str, Any] = {
+                        "model": selected_model,
+                        "max_tokens": 4096,
+                        "system": self.system_prompt,
+                        "messages": messages,
+                        "tools": tools_payload,
+                    }
+                    res = _post_with_retry(
+                        client,
+                        "https://api.anthropic.com/v1/messages",
+                        headers=headers,
+                        json_payload=payload,
+                    )
+                    data = res.json()
+                    content_blocks = data.get("content", [])
+                    for b in content_blocks:
+                        if b.get("type") == "thinking" and b.get("thinking"):
+                            yield {"type": "thought", "thought": str(b["thinking"]).strip()}
+                    tool_uses = [b for b in content_blocks if b.get("type") == "tool_use"]
+
+                    if not tool_uses:
+                        text_parts = [b.get("text", "") for b in content_blocks if b.get("type") == "text"]
+                        yield from self._emit_text_tokens("".join(text_parts))
+                        return
+
+                    pre_texts = [
+                        str(b.get("text", "")).strip()
+                        for b in content_blocks
+                        if b.get("type") == "text" and b.get("text")
+                    ]
+                    if pre_texts:
+                        yield {"type": "thought", "thought": "\n".join(pre_texts)}
+
+                    messages.append({"role": "assistant", "content": content_blocks})
+                    tool_results_blocks: list[dict[str, Any]] = []
+                    for tu in tool_uses:
+                        t_name = str(tu.get("name", ""))
+                        t_args = tu.get("input") or {}
+                        tool_res_str = "{}"
+                        for ev in self._run_tool_and_emit(t_name, t_args):
+                            if ev["type"] == "tool_result":
+                                tool_res_str = _truncate_tool_result(ev["result"])
+                            yield ev
+                        tool_results_blocks.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tu.get("id", t_name),
+                                "content": tool_res_str,
+                            }
+                        )
+                    messages.append({"role": "user", "content": tool_results_blocks})
+
+                yield from self._emit_text_tokens("Reached maximum tool execution steps. Please refine your request.")
+        except Exception as exc:
+            logger.exception("Claude API error: %s", _sanitize_error_message(exc))
+            yield {
+                "type": "token",
+                "token": f"⚠️ **Claude API error:** {_sanitize_error_message(exc)}",
+            }
+
+    # ------------------------------------------------------------------
+    # 3. Google Gemini Tool-Calling Agent Loop
+    # ------------------------------------------------------------------
+
+    def _agent_gemini(self, query: str, context_str: str, api_key: str) -> Iterator[dict[str, Any]]:
+        if not self.model or not self.model.strip():
+            yield {
+                "type": "token",
+                "token": "⚠️ **No model specified for Gemini.** Please select a model in **AI Settings**.",
+            }
+            return
+
+        selected_model = self.model.strip().replace("models/", "")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={api_key}"
+
+        contents: list[dict[str, Any]] = []
+        for h in self.history[-10:]:
+            role = "model" if h.get("role") == "assistant" else "user"
+            if h.get("content"):
+                contents.append({"role": role, "parts": [{"text": h["content"]}]})
+        contents.append({"role": "user", "parts": [{"text": f"{context_str}\n\nUser Request: {query}"}]})
+
+        tools_payload = [{"functionDeclarations": [t.to_gemini_declaration() for t in SAES_AGENT_TOOLS]}]
+
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                for _ in range(MAX_TOOL_ITERATIONS):
+                    payload: dict[str, Any] = {
+                        "systemInstruction": {"parts": [{"text": self.system_prompt}]},
+                        "contents": contents,
+                        "tools": tools_payload,
+                    }
+                    res = _post_with_retry(client, url, json_payload=payload)
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        break
+                    model_content = candidates[0].get("content", {})
+                    parts = model_content.get("parts", [])
+                    for p in parts:
+                        if p.get("thought") and p.get("text"):
+                            yield {"type": "thought", "thought": str(p["text"]).strip()}
+                    fn_calls = [p["functionCall"] for p in parts if "functionCall" in p]
+
+                    if not fn_calls:
+                        text = "".join(p.get("text", "") for p in parts if "text" in p and not p.get("thought"))
+                        yield from self._emit_text_tokens(text)
+                        return
+
+                    pre_texts = [
+                        str(p.get("text", "")).strip()
+                        for p in parts
+                        if "text" in p and not p.get("thought") and p.get("text")
+                    ]
+                    if pre_texts:
+                        yield {"type": "thought", "thought": "\n".join(pre_texts)}
+
+                    contents.append(model_content)
+                    response_parts: list[dict[str, Any]] = []
+                    for fc in fn_calls:
+                        t_name = str(fc.get("name", ""))
+                        t_args = fc.get("args") or {}
+                        tool_res: dict[str, Any] = {}
+                        for ev in self._run_tool_and_emit(t_name, t_args):
+                            if ev["type"] == "tool_result":
+                                tool_res = ev["result"]
+                            yield ev
+                        response_parts.append(
+                            {
+                                "functionResponse": {
+                                    "name": t_name,
+                                    "response": json.loads(_truncate_tool_result(tool_res)),
+                                }
+                            }
+                        )
+                    contents.append({"role": "user", "parts": response_parts})
+
+                yield from self._emit_text_tokens("Reached maximum tool execution steps. Please refine your request.")
+        except Exception as exc:
+            logger.exception("Gemini API error: %s", _sanitize_error_message(exc))
+            yield {
+                "type": "token",
+                "token": f"⚠️ **Gemini API error:** {_sanitize_error_message(exc)}",
+            }
+
+    # ------------------------------------------------------------------
+    # 4. Local Ollama / v1 Tool-Calling Agent Loop
+    # ------------------------------------------------------------------
+
+    def _agent_local(self, query: str, context_str: str) -> Iterator[dict[str, Any]]:
+        if not self.model or not self.model.strip():
+            yield {
+                "type": "token",
+                "token": (
+                    "⚠️ **No model specified for Local AI.** "
+                    "Please select or pull an Ollama model in **AI Settings**."
+                ),
+            }
+            return
+
+        selected_model = self.model.strip()
+        clean_url = (self.base_url or "http://localhost:11434").rstrip("/")
+        if clean_url.endswith("/v1"):
+            # OpenAI-compatible local server
+            old_base = self.base_url
+            self.base_url = clean_url[:-3] if clean_url.endswith("/v1") else clean_url
+            try:
+                yield from self._agent_openai(query, context_str, api_key="local")
+            finally:
+                self.base_url = old_base
+            return
+
+        messages = self._build_chat_messages(query, context_str)
+        tools_payload = [t.to_openai_tool() for t in SAES_AGENT_TOOLS]
+        num_ctx = _get_ollama_num_ctx()
+        timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
+
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                use_tools = True
+                nudged = False
+                for step in range(MAX_TOOL_ITERATIONS):
+                    payload: dict[str, Any] = {
+                        "model": selected_model,
+                        "stream": True,
+                        "messages": messages,
+                        "options": {"num_ctx": num_ctx},
+                    }
+                    if use_tools:
+                        payload["tools"] = tools_payload
+
+                    logger.debug(
+                        "Ollama POST %s/api/chat step=%d model=%s num_ctx=%d use_tools=%s messages=%d",
+                        clean_url,
+                        step + 1,
+                        selected_model,
+                        num_ctx,
+                        use_tools,
+                        len(messages),
+                    )
+                    step_t0 = time.perf_counter()
+
+                    thinking_parts: list[str] = []
+                    content_parts: list[str] = []
+                    tool_calls: list[dict[str, Any]] = []
+                    done_reason: str | None = None
+                    retry_without_tools = False
+
+                    with client.stream("POST", f"{clean_url}/api/chat", json=payload) as res:
+                        if res.status_code == 400 and use_tools:
+                            # Model may not support Ollama native tool calling; retry without tools
+                            logger.debug("Ollama returned 400 with tools enabled; retrying without tools")
+                            use_tools = False
+                            retry_without_tools = True
+                        else:
+                            res.raise_for_status()
+                            for line in res.iter_lines():
+                                if not line.strip():
+                                    continue
+                                chunk = json.loads(line)
+                                chunk_msg = chunk.get("message") or {}
+                                if chunk_msg.get("thinking"):
+                                    thinking_parts.append(str(chunk_msg["thinking"]))
+                                if chunk_msg.get("content"):
+                                    content_parts.append(str(chunk_msg["content"]))
+                                if chunk_msg.get("tool_calls"):
+                                    tool_calls.extend(chunk_msg["tool_calls"])
+                                if chunk.get("done_reason"):
+                                    done_reason = str(chunk["done_reason"])
+
+                    if retry_without_tools:
+                        continue
+
+                    thinking_text = "".join(thinking_parts).strip()
+                    raw_content = "".join(content_parts)
+                    logger.debug(
+                        "Ollama response step=%d elapsed=%.1fms done_reason=%s "
+                        "thinking_chars=%d content_chars=%d tool_calls=%d",
+                        step + 1,
+                        (time.perf_counter() - step_t0) * 1000.0,
+                        done_reason,
+                        len(thinking_text),
+                        len(raw_content),
+                        len(tool_calls),
+                    )
+                    if thinking_text:
+                        yield {"type": "thought", "thought": thinking_text}
+
+                    if not tool_calls:
+                        think_text, clean_content = _extract_think_blocks(raw_content)
+                        if think_text:
+                            yield {"type": "thought", "thought": think_text}
+                        if clean_content:
+                            yield from self._emit_text_tokens(clean_content)
+                            return
+
+                        if done_reason == "length":
+                            logger.warning(
+                                "Ollama model=%s stopped mid-response (done_reason=length, num_ctx=%d)",
+                                selected_model,
+                                num_ctx,
+                            )
+                            yield from self._emit_text_tokens(
+                                f"⚠️ **Local model `{selected_model}` stopped mid-response "
+                                "(context/token limit reached while thinking).** "
+                                "Try starting a new chat, shortening the prompt, or selecting a "
+                                "larger-context model in **AI Settings**."
+                            )
+                            return
+
+                        if not nudged:
+                            nudged = True
+                            logger.debug(
+                                "Ollama model=%s returned empty content and no tool_calls; nudging",
+                                selected_model,
+                            )
+                            if raw_content:
+                                messages.append({"role": "assistant", "content": raw_content})
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "Please continue and provide your final response or call "
+                                        "the appropriate tool."
+                                    ),
+                                }
+                            )
                             continue
-                        data_str = line[6:].strip()
-                        try:
-                            chunk = json.loads(data_str)
-                            candidates = chunk.get("candidates", [])
-                            if candidates:
-                                parts = candidates[0].get("content", {}).get("parts", [])
-                                for part in parts:
-                                    text = part.get("text", "")
-                                    if text:
-                                        yield text
-                        except Exception:
-                            continue
-        except Exception as e:
-            yield f"[Google Gemini API unavailable: {e!s}]. Falling back to offline engine:\n\n"
-            yield from self._stream_offline(query, context)
 
-    def _offline_statistical_interpret(self, query: str, context: str) -> str:
-        """Intelligent offline statistical interpretation engine when no cloud LLM key is configured."""
-        q_lower = query.lower()
+                        logger.warning(
+                            "Ollama model=%s finished without response or tool_calls (done_reason=%s)",
+                            selected_model,
+                            done_reason,
+                        )
+                        yield from self._emit_text_tokens(
+                            f"⚠️ **Local model `{selected_model}` finished thinking without "
+                            "returning a response or tool call.** Please try again or switch "
+                            "models in **AI Settings**."
+                        )
+                        return
 
-        if self.report is None or not self.report.cell_analyses:
-            return (
-                "No statistical analysis has been executed yet. "
-                "Please run an analysis on your dataset first, then ask questions about the tests, "
-                "assumptions, or effect sizes."
-            )
+                    if raw_content:
+                        think_text, pre_text = _extract_think_blocks(raw_content)
+                        combined_thought = "\n\n".join(p for p in (think_text, pre_text) if p)
+                        if combined_thought:
+                            yield {"type": "thought", "thought": combined_thought}
 
-        # Query: Why Welch / test selection
-        if "why" in q_lower or "welch" in q_lower or "test selection" in q_lower or "choose" in q_lower:
-            explanations: list[str] = []
-            for cell in self.report.cell_analyses:
-                res = cell.result
-                if "Welch" in res.test_name:
-                    levene_res = next((a for a in res.assumptions if "Levene" in a.name), None)
-                    p_val_str = f"p={levene_res.p_value:.3e}" if levene_res else "p < alpha"
-                    explanations.append(
-                        f"• For **{cell.instance} ({cell.metric})**, **{res.test_name}** was chosen "
-                        f"because Levene's test detected unequal variances across groups ({p_val_str}). "
-                        "Welch's correction adjusts degrees of freedom via the Welch-Satterthwaite equation, "
-                        "preventing inflated Type I error rates."
-                    )
-                else:
-                    explanations.append(
-                        f"• For **{cell.instance} ({cell.metric})**, **{res.test_name}** was used because "
-                        "the normality and equal variance assumptions were satisfied (or groups were balanced)."
-                    )
-            return "### Test Selection Rationale\n\n" + "\n\n".join(explanations)
+                    messages.append({"role": "assistant", "content": raw_content, "tool_calls": tool_calls})
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        t_name = str(fn.get("name", ""))
+                        raw_args = fn.get("arguments", {})
+                        t_args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+                        tool_res_str = "{}"
+                        for ev in self._run_tool_and_emit(t_name, t_args):
+                            if ev["type"] == "tool_result":
+                                tool_res_str = _truncate_tool_result(ev["result"])
+                            yield ev
+                        messages.append({"role": "tool", "content": tool_res_str})
 
-        # Query: Effect size / practical significance
-        if "effect size" in q_lower or "practical" in q_lower or "magnitude" in q_lower:
-            lines: list[str] = []
-            for cell in self.report.cell_analyses:
-                res = cell.result
-                if res.effect_size:
-                    mag_desc = (
-                        "A large effect indicates substantial practical differences."
-                        if res.effect_size.magnitude == "large"
-                        else "The differences between algorithms are modest."
-                    )
-                    lines.append(
-                        f"• **{cell.instance} ({cell.metric})**: {res.effect_size.name} = {res.effect_size.value:.4f} "
-                        f"({res.effect_size.magnitude.capitalize()} effect). {mag_desc}"
-                    )
-                else:
-                    lines.append(f"• **{cell.instance} ({cell.metric})**: No effect size computed.")
-            return "### Effect Size & Practical Significance Interpretation\n\n" + "\n".join(lines)
+                yield from self._emit_text_tokens("Reached maximum tool execution steps. Please refine your request.")
+        except Exception as exc:
+            logger.exception("Local AI error on %s: %s", clean_url, exc)
+            yield {
+                "type": "token",
+                "token": (
+                    f"⚠️ **Local AI error on `{clean_url}`:** {exc!s}. "
+                    "Please ensure Ollama is running or select another provider in **AI Settings**."
+                ),
+            }
 
-        # Query: Assumptions (normality / homoscedasticity)
-        if "assumption" in q_lower or "normal" in q_lower or "variance" in q_lower or "levene" in q_lower:
-            lines = []
-            for cell in self.report.cell_analyses:
-                res = cell.result
-                lines.append(f"#### `{cell.instance}` — `{cell.metric}`")
-                for a in res.assumptions:
-                    icon = "✅" if a.passed else "⚠️"
-                    status = "Passed" if a.passed else "Violated"
-                    lines.append(f"- {icon} **{a.name}**: statistic={a.statistic:.4f}, p={a.p_value:.4e} ({status})")
-            return "### Statistical Assumptions Evaluation\n\n" + "\n".join(lines)
-
-        # Default summary interpretation
-        summary_lines = [
-            "### Statistical Findings Summary",
-            f"Evaluated {len(self.report.cell_analyses)} experimental conditions (cells):",
-        ]
-        for cell in self.report.cell_analyses:
-            res = cell.result
-            sig = "statistically significant" if res.is_significant else "not statistically significant"
-            eff = f" with {res.effect_size.magnitude} effect ({res.effect_size.value:.3f})" if res.effect_size else ""
-            summary_lines.append(
-                f"- **{cell.instance} ({cell.metric})**: Tested using **{res.test_name}** "
-                f"($F/t={res.statistic:.3f}$, $p={res.p_value:.4e}$). "
-                f"The difference is {sig} at $\\alpha={res.alpha}${eff}."
-            )
-
-        summary_lines.append("\n*Tip: Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` to enable open-ended reasoning.*")
-        return "\n".join(summary_lines)
+    # ------------------------------------------------------------------
+    # Provider Discovery & Ollama Management (unchanged public API)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def fetch_local_models(base_url: str = "http://localhost:11434") -> list[str]:
@@ -590,223 +834,6 @@ class StatisticalChatAgent:
         except Exception:
             pass
         return []
-
-    def _call_local(
-        self,
-        query: str,
-        context: str,
-        model: str | None = None,
-        base_url: str | None = None,
-    ) -> str:
-        """Call local LLM (Ollama or OpenAI-compatible server)."""
-        if not model or not model.strip():
-            fallback = self._offline_statistical_interpret(query, context)
-            return (
-                "[No model specified for Local AI. Please connect to Ollama and select a model in Settings]. "
-                f"Falling back to offline statistical engine:\n\n{fallback}"
-            )
-        selected_model = model.strip()
-        clean_url = (base_url or "http://localhost:11434").rstrip("/")
-        prompt = f"{context}\n\nUser Question: {query}"
-
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                if clean_url.endswith("/v1"):
-                    v1_payload: dict[str, Any] = {
-                        "model": selected_model,
-                        "messages": [
-                            {"role": "system", "content": self.system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
-                    }
-                    res = client.post(f"{clean_url}/chat/completions", json=v1_payload)
-                    res.raise_for_status()
-                    data = res.json()
-                    choices = data.get("choices", [])
-                    if choices:
-                        return str(choices[0].get("message", {}).get("content", ""))
-                    return ""
-                else:
-                    ollama_payload: dict[str, Any] = {
-                        "model": selected_model,
-                        "stream": False,
-                        "messages": [
-                            {"role": "system", "content": self.system_prompt},
-                            {"role": "user", "content": prompt},
-                        ],
-                    }
-                    res = client.post(f"{clean_url}/api/chat", json=ollama_payload)
-                    res.raise_for_status()
-                    data = res.json()
-                    return str(data.get("message", {}).get("content", ""))
-        except Exception as e:
-            fallback = self._offline_statistical_interpret(query, context)
-            return (
-                f"[Local AI error on {clean_url} (model: {selected_model}): {e!s}]. "
-                f"Ensure Ollama or your local server is running.\n\n"
-                f"Falling back to offline statistical engine:\n\n{fallback}"
-            )
-
-    def _call_anthropic(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-    ) -> str:
-        """Call Anthropic Claude API for conversational response."""
-        if not model or not model.strip():
-            fallback = self._offline_statistical_interpret(query, context)
-            return (
-                "[No model specified for Anthropic Claude. Please select a model in Settings]. "
-                f"Falling back to offline statistical engine:\n\n{fallback}"
-            )
-        selected_model = model.strip()
-        prompt = f"{context}\n\nUser Question: {query}"
-        try:
-            import anthropic
-
-            client = anthropic.Anthropic(api_key=api_key)
-            message = client.messages.create(
-                model=selected_model,
-                max_tokens=1000,
-                system=self.system_prompt,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = message.content[0]
-            return str(getattr(content, "text", str(content)))
-        except ImportError:
-            try:
-                headers = {
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                }
-                payload: dict[str, Any] = {
-                    "model": selected_model,
-                    "max_tokens": 1000,
-                    "system": self.system_prompt,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-                with httpx.Client(timeout=45.0) as http_client:
-                    res = http_client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers=headers,
-                        json=payload,
-                    )
-                    res.raise_for_status()
-                    data = res.json()
-                    content_list = data.get("content", [])
-                    if content_list:
-                        return str(content_list[0].get("text", ""))
-                    return ""
-            except Exception as e:
-                fallback = self._offline_statistical_interpret(query, context)
-                return f"[Claude API unavailable: {e!s}]. Falling back to offline engine:\n\n{fallback}"
-        except Exception as e:
-            fallback = self._offline_statistical_interpret(query, context)
-            return f"[Claude API unavailable: {e!s}]. Falling back to offline engine:\n\n{fallback}"
-
-    def _call_openai(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-        base_url: str | None = None,
-    ) -> str:
-        """Call OpenAI API or OpenAI-compatible custom endpoint."""
-        if not model or not model.strip():
-            fallback = self._offline_statistical_interpret(query, context)
-            return (
-                "[No model specified for OpenAI. Please select a model in Settings]. "
-                f"Falling back to offline statistical engine:\n\n{fallback}"
-            )
-        selected_model = model.strip()
-        prompt = f"{context}\n\nUser Question: {query}"
-        try:
-            import openai
-
-            client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
-            completion = client.chat.completions.create(
-                model=selected_model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            return str(completion.choices[0].message.content or "")
-        except ImportError:
-            try:
-                target_url = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload: dict[str, Any] = {
-                    "model": selected_model,
-                    "messages": [
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                }
-                with httpx.Client(timeout=45.0) as http_client:
-                    res = http_client.post(target_url, headers=headers, json=payload)
-                    res.raise_for_status()
-                    data = res.json()
-                    choices = data.get("choices", [])
-                    if choices:
-                        return str(choices[0].get("message", {}).get("content", ""))
-                    return ""
-            except Exception as e:
-                fallback = self._offline_statistical_interpret(query, context)
-                return f"[OpenAI API unavailable: {e!s}]. Falling back to offline engine:\n\n{fallback}"
-        except Exception as e:
-            fallback = self._offline_statistical_interpret(query, context)
-            return f"[OpenAI API unavailable: {e!s}]. Falling back to offline engine:\n\n{fallback}"
-
-    def _call_gemini(
-        self,
-        query: str,
-        context: str,
-        api_key: str,
-        model: str | None = None,
-    ) -> str:
-        """Call Google Gemini REST API."""
-        if not model or not model.strip():
-            fallback = self._offline_statistical_interpret(query, context)
-            return (
-                "[No model specified for Google Gemini. Please connect and select an available model in Settings]. "
-                f"Falling back to offline statistical engine:\n\n{fallback}"
-            )
-        selected_model = model.strip().replace("models/", "")
-        prompt = f"{context}\n\nUser Question: {query}"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={api_key}"
-        payload: dict[str, Any] = {
-            "systemInstruction": {
-                "parts": [{"text": self.system_prompt}],
-            },
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}],
-                }
-            ],
-        }
-        try:
-            with httpx.Client(timeout=45.0) as client:
-                res = client.post(url, json=payload)
-                res.raise_for_status()
-                data = res.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return str(parts[0].get("text", ""))
-                return ""
-        except Exception as e:
-            fallback = self._offline_statistical_interpret(query, context)
-            return f"[Google Gemini API unavailable: {e!s}]. Falling back to offline engine:\n\n{fallback}"
 
     @staticmethod
     def start_ollama_service() -> bool:
@@ -838,15 +865,7 @@ class StatisticalChatAgent:
         base_url: str | None = None,
     ) -> dict[str, Any]:
         """Probe AI provider connectivity and retrieve available models."""
-        prov = (provider or "offline").lower().strip()
-
-        if prov == "offline":
-            return {
-                "status": "ok",
-                "models": ["deterministic-statistical-engine"],
-                "message": "Deterministic statistical inference engine active (Zero cloud API dependencies).",
-                "can_start_ollama": False,
-            }
+        prov = (provider or "local").lower().strip()
 
         if prov == "local":
             clean_url = (base_url or "http://localhost:11434").rstrip("/")
@@ -858,7 +877,6 @@ class StatisticalChatAgent:
                     "message": f"Connected to Ollama ({len(models)} model(s) available).",
                     "can_start_ollama": False,
                 }
-            # Check if running but has 0 models
             try:
                 with httpx.Client(timeout=2.0) as client:
                     resp = client.get(f"{clean_url}/api/tags")
@@ -872,7 +890,6 @@ class StatisticalChatAgent:
             except Exception:
                 pass
 
-            # Not running, check if binary is installed
             binary = shutil.which("ollama")
             if not binary:
                 for p in ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/usr/bin/ollama"]:
@@ -942,23 +959,13 @@ class StatisticalChatAgent:
         if prov == "openai":
             key = (api_key or os.getenv("OPENAI_API_KEY") or "").strip()
             if not key:
-                return {
-                    "status": "error",
-                    "models": [],
-                    "message": "OpenAI API key is missing.",
-                }
+                return {"status": "error", "models": [], "message": "OpenAI API key is missing."}
             try:
                 clean_url = (base_url or "https://api.openai.com/v1").rstrip("/")
-                target_url = f"{clean_url}/models"
-                headers = {"Authorization": f"Bearer {key}"}
                 with httpx.Client(timeout=10.0) as client:
-                    res = client.get(target_url, headers=headers)
+                    res = client.get(f"{clean_url}/models", headers={"Authorization": f"Bearer {key}"})
                     if res.status_code == 401:
-                        return {
-                            "status": "error",
-                            "models": [],
-                            "message": "Invalid OpenAI API key.",
-                        }
+                        return {"status": "error", "models": [], "message": "Invalid OpenAI API key."}
                     res.raise_for_status()
                     data = res.json()
                     chat_models = [
@@ -976,33 +983,18 @@ class StatisticalChatAgent:
                         "message": f"Successfully connected to OpenAI ({len(sorted_models)} models available).",
                     }
             except Exception as e:
-                return {
-                    "status": "error",
-                    "models": [],
-                    "message": f"Failed to connect to OpenAI: {e!s}",
-                }
+                return {"status": "error", "models": [], "message": f"Failed to connect to OpenAI: {e!s}"}
 
         if prov == "anthropic":
             key = (api_key or os.getenv("ANTHROPIC_API_KEY") or "").strip()
             if not key:
-                return {
-                    "status": "error",
-                    "models": [],
-                    "message": "Anthropic API key is missing.",
-                }
+                return {"status": "error", "models": [], "message": "Anthropic API key is missing."}
             try:
-                headers = {
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                }
+                headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
                 with httpx.Client(timeout=10.0) as client:
                     res = client.get("https://api.anthropic.com/v1/models", headers=headers)
                     if res.status_code == 401:
-                        return {
-                            "status": "error",
-                            "models": [],
-                            "message": "Invalid Anthropic API key.",
-                        }
+                        return {"status": "error", "models": [], "message": "Invalid Anthropic API key."}
                     if res.status_code == 200:
                         data = res.json()
                         models = [m["id"] for m in data.get("data", [])]
@@ -1017,17 +1009,9 @@ class StatisticalChatAgent:
                         "message": f"Failed to fetch models from Anthropic (HTTP {res.status_code}).",
                     }
             except Exception as e:
-                return {
-                    "status": "error",
-                    "models": [],
-                    "message": f"Failed to connect to Anthropic: {e!s}",
-                }
+                return {"status": "error", "models": [], "message": f"Failed to connect to Anthropic: {e!s}"}
 
-        return {
-            "status": "error",
-            "models": [],
-            "message": f"Unknown provider: {provider}",
-        }
+        return {"status": "error", "models": [], "message": f"Unknown provider: {provider}"}
 
     @staticmethod
     def pull_ollama_model(name: str, base_url: str = "http://localhost:11434") -> dict[str, str]:
@@ -1049,10 +1033,7 @@ class StatisticalChatAgent:
                     "message": f"Ollama pull returned HTTP {res.status_code}: {res.text}",
                 }
         except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to pull model '{clean_name}': {e!s}",
-            }
+            return {"status": "error", "message": f"Failed to pull model '{clean_name}': {e!s}"}
 
     @staticmethod
     def stream_pull_ollama_model(

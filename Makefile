@@ -1,4 +1,4 @@
-.PHONY: help install start-api build lint format test ci release-dry-run release-stamp version branch
+.PHONY: help install start-api start-api-debug build lint format test ci release-dry-run release-stamp version branch
 
 # ── Variables ────────────────────────────────────────────────
 BUMP      ?= minor
@@ -16,6 +16,9 @@ install: ## Install saes-ai dependencies with all extras via uv
 # ── Run ──────────────────────────────────────────────────────
 start-api: ## Launch standalone SAES-AI FastAPI REST server
 	uv run uvicorn saes_ai.server.app:app --reload --port 8001
+
+start-api-debug: ## Launch standalone SAES-AI FastAPI REST server with DEBUG console logging
+	SAES_AI_LOG_LEVEL=DEBUG uv run uvicorn saes_ai.server.app:app --reload --port 8001 --log-level debug
 
 start-mcp: ## Run SAES MCP server via stdio
 	uv run saes-mcp

@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Local Ollama agent (`StatisticalChatAgent._agent_local`) no longer stops silently mid-thought: increased default `num_ctx` to `16384` (configurable via `SAES_OLLAMA_NUM_CTX`), switched `/api/chat` to streaming NDJSON accumulation to prevent total-request timeouts, handled unclosed `<think>` blocks, and added explicit recovery/warning messages when `done_reason == "length"` or when thinking ends without content or tool calls.
+
 ### Added
+- Structured `DEBUG` console logging (`SAES_AI_LOG_LEVEL=DEBUG`, `make start-api-debug` / `make start-ai-debug`) across FastAPI request middleware, chat routes, agent dispatch, Ollama streaming steps, and tool calls/results.
+- `generate_plot` agent tool in `saes_ai.chat.tools` generating interactive Plotly specifications and static PNG previews for all `saesV2` plot/diagram types (`boxplot`, `violin`, `critical-distance`, `bayesian-rank`, `barplot`, `lineplot`, `ecdf`, `scatter`).
+- Inline chat artifact streaming (`artifact` NDJSON event in `/api/v1/chat/stream` and `artifacts` field in `ChatResponse`) emitted by `generate_plot` and `generate_statistical_table` so diagrams, images, and tables render directly in chat with download metadata.
 - Initial standalone release of `saes-ai` extracted from SAES core.
 - Conversational statistical assistant (`StatisticalChatAgent`) with multi-provider LLM support (Ollama, OpenAI, Anthropic, Google Gemini, and offline rule engine).
 - Model Context Protocol (MCP) server (`saes-mcp`) exposing SAES statistical routines to external agents.

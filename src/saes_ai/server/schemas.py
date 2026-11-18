@@ -1,6 +1,15 @@
 """Pydantic request and response schemas for SAES-AI REST & Streaming endpoints."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
+
+
+class ChatHistoryItem(BaseModel):
+    """Single historical message turn for multi-turn agent context."""
+
+    role: str
+    content: str
 
 
 class ChatRequest(BaseModel):
@@ -9,8 +18,13 @@ class ChatRequest(BaseModel):
     query: str
     dataset_name: str | None = None
     csv_data: str | None = None
+    attached_csv: str | None = None
+    attached_filename: str | None = None
+    current_view: str | None = None
+    current_tab: str | None = None
+    history: list[ChatHistoryItem] = Field(default_factory=list)
     alpha: float = 0.05
-    provider: str = "offline"
+    provider: str = "local"
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
@@ -21,6 +35,9 @@ class ChatResponse(BaseModel):
 
     response: str
     context_used: bool
+    ui_actions: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LocalModelsResponse(BaseModel):

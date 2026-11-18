@@ -32,7 +32,7 @@ def test_chat_endpoint() -> None:
             "query": "Why was this test chosen?",
             "csv_data": SAMPLE_CSV,
             "alpha": 0.05,
-            "provider": "offline",
+            "provider": "local",
         },
     )
     assert res.status_code == 200
@@ -48,14 +48,14 @@ def test_chat_stream_endpoint() -> None:
             "query": "Why was this test chosen?",
             "csv_data": SAMPLE_CSV,
             "alpha": 0.05,
-            "provider": "offline",
+            "provider": "openai",
         },
     )
     assert res.status_code == 200
     assert "token" in res.text
     tokens = [json.loads(line)["token"] for line in res.text.strip().split("\n") if line.strip()]
     full_text = "".join(tokens)
-    assert "Test Selection Rationale" in full_text
+    assert "OpenAI API key missing" in full_text
 
 
 def test_get_local_models_endpoint() -> None:
@@ -67,14 +67,7 @@ def test_get_local_models_endpoint() -> None:
 
 
 def test_probe_provider_endpoint() -> None:
-    # 1. Offline probe
-    res_off = client.post("/api/v1/chat/probe", json={"provider": "offline"})
-    assert res_off.status_code == 200
-    data_off = res_off.json()
-    assert data_off["status"] == "ok"
-    assert "deterministic-statistical-engine" in data_off["models"]
-
-    # 2. Local probe (unreachable port)
+    # Local probe (unreachable port)
     res_local = client.post(
         "/api/v1/chat/probe",
         json={"provider": "local", "base_url": "http://127.0.0.1:99999"},
