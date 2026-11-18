@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Released]
+
+## [0.2.0] — 2026-11-18 (@rorro6787)
+
 ### Fixed
 - Local Ollama agent (`StatisticalChatAgent._agent_local`) no longer stops silently mid-thought: increased default `num_ctx` to `16384` (configurable via `SAES_OLLAMA_NUM_CTX`), switched `/api/chat` to streaming NDJSON accumulation to prevent total-request timeouts, handled unclosed `<think>` blocks, and added explicit recovery/warning messages when `done_reason == "length"` or when thinking ends without content or tool calls.
 
@@ -23,4 +27,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `generate_benchmark_table` and `explore_dataset_distributions` MCP tools for ANOVA/Friedman/Wilcoxon table generation and normality/test recommendation profiling.
 - Global Friedman + Nemenyi CD and Bayesian posterior ranking summaries injected into `build_analysis_context`.
 
-## [Released]
