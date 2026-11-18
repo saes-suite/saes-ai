@@ -42,9 +42,6 @@ saes-ai-api = "saes_ai.server.app:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/saes_ai"]
 
-[tool.uv.sources]
-saesV2 = { path = "../saesV2", editable = true }
-
 [tool.ruff]
 line-length = 120
 target-version = "py311"

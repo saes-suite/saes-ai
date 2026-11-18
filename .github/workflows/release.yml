@@ -4,6 +4,17 @@ on:
   pull_request:
     types: [closed]
     branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        default: minor
+        options:
+          - minor
+          - patch
+          - major
 
 permissions:
   contents: write
