@@ -88,7 +88,7 @@ def main() -> None:
     import uvicorn
 
     log_level = (os.getenv("SAES_AI_LOG_LEVEL") or "info").lower().strip()
-    uvicorn.run("saes_ai.server.app:app", host="0.0.0.0", port=8001, reload=True, log_level=log_level)
+    uvicorn.run("saes_ai.server.app:app", host="0.0.0.0", port=8070, reload=True, log_level=log_level)
 
 
 if __name__ == "__main__":

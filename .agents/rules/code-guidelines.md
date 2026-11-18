@@ -33,6 +33,6 @@ trigger: always_on
 ## Non-Negotiable Architecture Rules (API-First & Python Parity)
 
 1. **Python Programmatic API First**: Every AI, chat, or agent capability exposed to `saes-ui` MUST be implemented as a clean programmatic Python API in `saes_ai` and exposed via FastAPI (`src/saes_ai/server/`) and/or MCP (`src/saes_ai/mcp/`).
-2. **Backend-Driven Logic**: `saes-ui` must never construct domain prompts, statistical context, or analytical interpretations locally; it must consume `saes-ai` REST endpoints (`:8001`).
+2. **Backend-Driven Logic**: `saes-ui` must never construct domain prompts, statistical context, or analytical interpretations locally; it must consume `saes-ai` REST endpoints (`:8070`).
 3. **Mandatory Quality Gate**: Before finishing any task or suggesting a commit, **you MUST run `make ci`** (`uv run ruff check .`, `uv run mypy src`, `uv run pytest`).
 4. **Versioning & Changelog**: Update `CHANGELOG.md` under `## [Unreleased]`, never edit `version.txt` or `pyproject.toml` version manually (use `make release-stamp`), and follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`).

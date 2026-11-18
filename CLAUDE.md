@@ -31,7 +31,7 @@ saes-ai/
 
 ## Non-Negotiable Architecture Rules
 
-1. **Python API & REST Parity**: Every AI feature exposed in `saes-ui` must exist as a programmatic Python API in `saes_ai` and be served via `saes_ai.server` (`:8001`). The UI does not perform analytical or prompt-building calculations locally.
+1. **Python API & REST Parity**: Every AI feature exposed in `saes-ui` must exist as a programmatic Python API in `saes_ai` and be served via `saes_ai.server` (`:8070`). The UI does not perform analytical or prompt-building calculations locally.
 2. **Changelog & Versioning**: Update `CHANGELOG.md` under `## [Unreleased]`; never edit `version.txt` or `pyproject.toml` version manually (use `make release-stamp`).
 
 ## Mandatory Quality Gate
