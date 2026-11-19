@@ -1,6 +1,6 @@
 {
   "name": "saes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Statistical evaluation suite for stochastic algorithms, automated hypothesis testing, and benchmark visualization.",
   "author": {
     "name": "SAES Team"

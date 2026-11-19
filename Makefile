@@ -1,4 +1,4 @@
-.PHONY: help install start-api start-api-debug build lint format test ci release-dry-run release-stamp version branch
+.PHONY: help install start-api start-api-debug start-mcp build lint format test ci release-dry-run release-stamp version branch
 
 # ── Variables ────────────────────────────────────────────────
 BUMP      ?= minor

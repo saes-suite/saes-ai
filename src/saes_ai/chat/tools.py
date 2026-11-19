@@ -126,8 +126,8 @@ def _resolve_dataset_csv(
         return ctx.staged_csv, ctx.staged_filename or "uploaded_dataset.csv", None
 
     raise ValueError(
-        "No dataset specified and no active or uploaded dataset is currently selected. "
-        "Use `list_datasets` to see available datasets or ask the user to upload one."
+        "No dataset specified. Pass `dataset_name` (use `list_datasets` to see available datasets) "
+        "or ask the user which dataset they want to use."
     )
 
 
@@ -187,7 +187,6 @@ def _tool_list_datasets(ctx: ToolContext, _args: dict[str, Any]) -> dict[str, An
         entry: dict[str, Any] = {
             "filename": f.name,
             "size_bytes": stat.st_size,
-            "is_active": f.name == ctx.active_dataset_name,
         }
         try:
             df = CSVReader().read(f)
@@ -209,7 +208,6 @@ def _tool_list_datasets(ctx: ToolContext, _args: dict[str, Any]) -> dict[str, An
 
     result: dict[str, Any] = {
         "datasets_count": len(items),
-        "active_dataset": ctx.active_dataset_name,
         "datasets": items,
     }
     if ctx.staged_csv is not None:
@@ -303,7 +301,6 @@ def _tool_create_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, An
     ctx.active_dataset_name = filename
 
     ctx.emit_ui_action({"type": "refresh_datasets"})
-    ctx.emit_ui_action({"type": "select_dataset", "dataset_name": filename})
 
     return {
         "saved": True,
@@ -405,7 +402,6 @@ def _tool_edit_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
         saved_path = str(out_path)
         ctx.active_dataset_name = target_filename
         ctx.emit_ui_action({"type": "refresh_datasets"})
-        ctx.emit_ui_action({"type": "select_dataset", "dataset_name": target_filename})
 
     return {
         "filename": target_filename,
@@ -951,7 +947,7 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
         name="create_dataset",
         description=(
             "Create a new SAES benchmark CSV dataset from structured rows or CSV text, validate it, "
-            "save it to SAES storage, and select it in the UI."
+            "and save it to SAES storage."
         ),
         parameters={
             "type": "object",
@@ -1229,8 +1225,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="navigate_ui",
         description=(
-            "Navigate the SAES UI to a specific view or workspace tab, optionally selecting a dataset, "
-            "changing alpha, or pre-configuring the Statistical Workbench."
+            "Navigate the SAES UI when the user explicitly asks to open a view or workspace tab, "
+            "optionally opening a dataset, changing alpha, or pre-configuring the Statistical Workbench."
         ),
         parameters={
             "type": "object",

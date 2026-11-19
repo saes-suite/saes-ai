@@ -162,29 +162,27 @@ class StatisticalChatAgent:
             parts.append(stats_ctx)
 
         ctx = self.tool_context
-        state_lines = ["### Active Workspace State"]
+        state_lines = ["### Workspace Context"]
         if ctx.active_dataset_name:
-            state_lines.append(f"- **Active Dataset**: `{ctx.active_dataset_name}`")
-        else:
-            state_lines.append("- **Active Dataset**: None selected")
+            state_lines.append(f"- **Currently Open Dataset in UI**: `{ctx.active_dataset_name}`")
 
         try:
             ctx.datasets_dir.mkdir(parents=True, exist_ok=True)
             stored_files = sorted(p.name for p in ctx.datasets_dir.glob("*.csv") if p.is_file())
             if stored_files:
                 state_lines.append(
-                    f"- **Datasets Available in Storage ({len(stored_files)})**: "
+                    f"- **Datasets in Storage ({len(stored_files)})**: "
                     + ", ".join(f"`{name}`" for name in stored_files[:20])
                 )
             else:
-                state_lines.append("- **Datasets Available in Storage**: None")
+                state_lines.append("- **Datasets in Storage**: None")
         except Exception:
             pass
 
         if ctx.staged_csv is not None:
             state_lines.append(
-                f"- **Staged Chat Upload**: `{ctx.staged_filename or 'uploaded_dataset.csv'}` "
-                f"({len(ctx.staged_csv)} chars) — call `inspect_dataset(use_staged=true)` to inspect it."
+                f"- **Attached CSV in Message**: `{ctx.staged_filename or 'uploaded_dataset.csv'}` "
+                f"({len(ctx.staged_csv)} chars)"
             )
         if ctx.current_view:
             view_str = ctx.current_view + (f" (tab: `{ctx.current_tab}`)" if ctx.current_tab else "")

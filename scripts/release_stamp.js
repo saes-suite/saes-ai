@@ -165,6 +165,15 @@ function main() {
     console.log(`✅ package.json version bumped to ${nextVersion}`);
   }
 
+  // Update Claude plugin manifest if present
+  const pluginPath = path.resolve("src/saes_ai/plugins/claude/plugin.json");
+  if (fs.existsSync(pluginPath)) {
+    const plugin = JSON.parse(fs.readFileSync(pluginPath, "utf-8"));
+    plugin.version = nextVersion;
+    fs.writeFileSync(pluginPath, JSON.stringify(plugin, null, 2) + "\n");
+    console.log(`✅ plugin.json version bumped to ${nextVersion}`);
+  }
+
   console.log(`\n✅ Changelog stamped as ${release}`);
   console.log(`✅ Version bumped to ${nextVersion}`);
 }
