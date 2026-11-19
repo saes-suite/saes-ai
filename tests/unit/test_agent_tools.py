@@ -34,7 +34,7 @@ def test_create_list_inspect_edit_delete_dataset(tmp_path: Path) -> None:
     assert created["saved"] is True
     assert created["is_valid"] is True
     assert any(a["type"] == "refresh_datasets" for a in ctx.ui_actions)
-    assert any(a["type"] == "select_dataset" and a["dataset_name"] == "synth.csv" for a in ctx.ui_actions)
+    assert not any(a["type"] == "select_dataset" for a in ctx.ui_actions)
 
     # 2. Overwrite guard
     dup = execute_tool(ctx, "create_dataset", {"filename": "synth.csv", "csv_content": _sample_valid_csv()})
