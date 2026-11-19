@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 import time
 from collections.abc import Awaitable, Callable
 
@@ -11,6 +12,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from saes_ai.server.routes import router as chat_router
 
 logger = logging.getLogger("saes_ai.server")
+
+_ANSI_RESET = "\033[0m"
+_LEVEL_COLORS: dict[int, str] = {
+    logging.DEBUG: "\033[38;5;208m",
+    logging.WARNING: "\033[33m",
+    logging.ERROR: "\033[31m",
+    logging.CRITICAL: "\033[1;31m",
+}
+
+
+class _ColorFormatter(logging.Formatter):
+    """Console formatter that colorizes log lines by severity level."""
+
+    def __init__(self, fmt: str, datefmt: str | None = None, *, use_color: bool = True) -> None:
+        super().__init__(fmt=fmt, datefmt=datefmt)
+        self.use_color = use_color
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        if not self.use_color:
+            return formatted
+        color = _LEVEL_COLORS.get(record.levelno)
+        if not color:
+            return formatted
+        return f"{color}{formatted}{_ANSI_RESET}"
+
+
+def _should_use_color() -> bool:
+    if os.getenv("NO_COLOR"):
+        return False
+    if os.getenv("FORCE_COLOR") or os.getenv("CLICOLOR_FORCE"):
+        return True
+    return sys.stderr.isatty()
 
 
 def configure_logging(level: str | None = None) -> None:
@@ -23,9 +57,10 @@ def configure_logging(level: str | None = None) -> None:
     if not pkg_logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(
-            logging.Formatter(
+            _ColorFormatter(
                 fmt="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
                 datefmt="%H:%M:%S",
+                use_color=_should_use_color(),
             )
         )
         pkg_logger.addHandler(handler)

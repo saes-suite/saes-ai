@@ -99,3 +99,41 @@ def test_pull_ollama_stream_endpoint() -> None:
     lines = [json.loads(line) for line in res.text.strip().split("\n") if line.strip()]
     assert len(lines) >= 1
     assert "error" in lines[0]
+
+
+def test_color_formatter_debug_orange() -> None:
+    import logging
+
+    from saes_ai.server.app import _ANSI_RESET, _LEVEL_COLORS, _ColorFormatter
+
+    fmt = _ColorFormatter(
+        fmt="%(levelname)s | %(message)s",
+        use_color=True,
+    )
+    record = logging.LogRecord(
+        name="saes_ai.server",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg="hello debug",
+        args=(),
+        exc_info=None,
+    )
+    rendered = fmt.format(record)
+    assert rendered.startswith(_LEVEL_COLORS[logging.DEBUG])
+    assert rendered.endswith(_ANSI_RESET)
+    assert "DEBUG | hello debug" in rendered
+
+    info_record = logging.LogRecord(
+        name="saes_ai.server",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hello info",
+        args=(),
+        exc_info=None,
+    )
+    assert fmt.format(info_record) == "INFO | hello info"
+
+    plain_fmt = _ColorFormatter(fmt="%(levelname)s | %(message)s", use_color=False)
+    assert plain_fmt.format(record) == "DEBUG | hello debug"
