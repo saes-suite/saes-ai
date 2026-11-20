@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Released]
+
+## [0.3.1] — 2026-11-20 (@rorro6787)
+
 ### Changed
 
 - Removed redundant `ImportError` fallback for `saesV2.server.storage.get_datasets_dir` in `saes_ai/server/routes.py`.
@@ -14,8 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Use absolute `raw.githubusercontent.com` URL for the SAES logo in `README.md` so it renders properly on PyPI.
-
-## [Released]
 
 ## [0.3.0] — 2026-11-19 (@rorro6787)
 
