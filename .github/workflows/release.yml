@@ -80,12 +80,13 @@ jobs:
       - name: Sync dependencies & lockfile
         run: |
           if [ -d "../saesV2" ]; then
-            uv sync --extra dev
+            uv sync --extra dev --upgrade-package saesV2
           else
-            uv lock || true
+            uv lock --upgrade-package saesV2 || true
           fi
 
       - name: Commit and push release changes
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -93,5 +94,30 @@ jobs:
           if [ -f src/saes_ai/plugins/claude/plugin.json ]; then git add src/saes_ai/plugins/claude/plugin.json; fi
           if [ -f uv.lock ]; then git add uv.lock; fi
           RELEASE_VERSION=$(cat version.txt | sed 's/-SNAPSHOT//')
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           git commit -m "Setting release v${RELEASE_VERSION} from ${{ steps.bump.outputs.branch }} [skip ci]"
+          git tag "v${RELEASE_VERSION}"
           git push
+          git push origin "v${RELEASE_VERSION}"
+
+      - name: Create GitHub Release from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.commit.outputs.version }}
+        run: |
+          python3 - <<'EOF'
+          import os, pathlib, re
+
+          version = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(text)
+          notes = match.group(0).strip() if match else f"Release v{version}"
+          pathlib.Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
+          EOF
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release_notes.md

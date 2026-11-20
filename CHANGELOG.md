@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Production `Dockerfile` (`python:3.12-slim` + `uv`) and `.dockerignore` exposing port `8070`, automatically upgrading `saesV2` from PyPI on build.
+- Automatic git tag (`vX.Y.Z`) creation and GitHub Release publishing in `.github/workflows/release.yml`, plus `--upgrade-package saesV2` lockfile sync on release.
+
 ## [Released]
 
 ## [0.3.1] — 2026-11-20 (@rorro6787)
