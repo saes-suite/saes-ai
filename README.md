@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/saes-logo.svg" alt="SAES Logo" width="128" />
+  <img src="https://raw.githubusercontent.com/saes-suite/saes-ai/main/assets/saes-logo.svg" alt="SAES Logo" width="128" />
 </p>
 
 # SAES-AI
