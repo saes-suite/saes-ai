@@ -3,13 +3,13 @@
 import io
 import json
 import logging
-import os
 from collections.abc import Generator
 from pathlib import Path
 
 import saesV2
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from saesV2.server.storage import get_datasets_dir
 
 from saes_ai.chat.agent import StatisticalChatAgent
 from saes_ai.chat.tools import ToolContext
@@ -24,20 +24,6 @@ from saes_ai.server.schemas import (
 )
 
 logger = logging.getLogger("saes_ai.server.routes")
-
-try:
-    from saesV2.server.storage import get_datasets_dir
-except ImportError:
-
-    def get_datasets_dir() -> Path:
-        custom_dir = os.getenv("SAES_DATASETS_DIR")
-        if custom_dir:
-            path = Path(custom_dir).resolve()
-        else:
-            path = Path.cwd() / "datasets"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
 
 router = APIRouter(prefix="/api/v1", tags=["Chat"])
 
