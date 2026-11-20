@@ -1815,7 +1815,7 @@ wheels = [
 
 [[package]]
 name = "saes-ai"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1863,7 +1863,7 @@ provides-extras = ["providers", "dev"]
 
 [[package]]
 name = "saesv2"
-version = "0.2.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1875,9 +1875,9 @@ dependencies = [
     { name = "statsmodels" },
     { name = "tabulate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/20/5608aba713ff53c3fbca4ad07d0eac4f118f85a1031ea5e85b32662e56ba/saesv2-0.2.0.tar.gz", hash = "sha256:9fff43d27c8e8be1d98b0261077112895239d5e27d521c30078402570deb6d52", size = 425765, upload-time = "2026-11-18T11:35:54.878Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/eb/ab4eb919499b524630e17d4e5ce269319d76b9abcf20b87d701226198bf9/saesv2-0.3.1.tar.gz", hash = "sha256:f6f90c295659ebbf426e714ccf8c99df4be8517c1a19157f30c9c479c32802a5", size = 435227, upload-time = "2026-11-20T08:50:49.873Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/7e/bbf8746ef3485b4a2a8465b16c26f6e22e05aae3749c9766d091a1330311/saesv2-0.2.0-py3-none-any.whl", hash = "sha256:4df509dd76e46f0979035c1ebc4ff56c854d6937c752c3c356938be06544ee56", size = 113004, upload-time = "2026-11-18T11:35:53.458Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/80/86bb06b1f31fb3b35fa9ec754e62326e793426367e7883cc4a73c73980b6/saesv2-0.3.1-py3-none-any.whl", hash = "sha256:fe92a007f15321d63181f810f978b36db5603e559a2e73f2fc5443d8c6236cf0", size = 124868, upload-time = "2026-11-20T08:50:48.426Z" },
 ]
 
 [package.optional-dependencies]
