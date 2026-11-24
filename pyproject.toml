@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "saes-ai"
-version = "0.3.2"
+version = "0.4.0"
 description = "AI Agent, Chat Assistant, and Model Context Protocol (MCP) server for SAES"
 readme = "README.md"
 requires-python = ">=3.11"

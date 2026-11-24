@@ -1814,15 +1814,40 @@ wheels = [
 ]
 
 [[package]]
+name = "saes"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "statsmodels" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/45/de/29c5e12d178af35a95f1a4d09b2e53a95fa19b4d4146c980f66609be4b65/saes-2.0.0.tar.gz", hash = "sha256:d74df73e2baad7413563646022ecfbec518ee9848470f06979467566f46dfda4", size = 646618, upload-time = "2026-11-24T20:15:15.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/a1/3eae5e12a2a3d15c66d7feb8e44b8f4583abba048222b3d45c68c50433d7/saes-2.0.0-py3-none-any.whl", hash = "sha256:abb318c15f0f8229568d7c819a065a4942a8bc8d720ca93c8ca125acb516e4ce", size = 172994, upload-time = "2026-11-24T20:15:14.154Z" },
+]
+
+[package.optional-dependencies]
+viz = [
+    { name = "matplotlib" },
+    { name = "plotly" },
+    { name = "seaborn" },
+]
+
+[[package]]
 name = "saes-ai"
-version = "0.3.2"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-multipart" },
-    { name = "saesv2", extra = ["viz"] },
+    { name = "saes", extra = ["viz"] },
     { name = "uvicorn" },
 ]
 
@@ -1856,36 +1881,10 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "saesv2", extras = ["viz"], specifier = ">=0.1.0" },
+    { name = "saes", extras = ["viz"], specifier = ">=2.0.0" },
     { name = "uvicorn", specifier = ">=0.28.0" },
 ]
 provides-extras = ["providers", "dev"]
-
-[[package]]
-name = "saesv2"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pandas" },
-    { name = "pydantic" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "statsmodels" },
-    { name = "tabulate" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/59/eb/ab4eb919499b524630e17d4e5ce269319d76b9abcf20b87d701226198bf9/saesv2-0.3.1.tar.gz", hash = "sha256:f6f90c295659ebbf426e714ccf8c99df4be8517c1a19157f30c9c479c32802a5", size = 435227, upload-time = "2026-11-20T08:50:49.873Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/80/86bb06b1f31fb3b35fa9ec754e62326e793426367e7883cc4a73c73980b6/saesv2-0.3.1-py3-none-any.whl", hash = "sha256:fe92a007f15321d63181f810f978b36db5603e559a2e73f2fc5443d8c6236cf0", size = 124868, upload-time = "2026-11-20T08:50:48.426Z" },
-]
-
-[package.optional-dependencies]
-viz = [
-    { name = "matplotlib" },
-    { name = "plotly" },
-    { name = "seaborn" },
-]
 
 [[package]]
 name = "scipy"
@@ -2158,15 +2157,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/f5/b9b47f3c688a8af1b199af96e098b8f20897a60b45187c57ce6fcde77a5f/statsmodels-0.15.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:583eb2a46f7c7a5c34a26715c8b6d92199bfb4f04623db5fff9902a3c7c832d3", size = 11934786, upload-time = "2026-08-30T07:41:46.809Z" },
     { url = "https://files.pythonhosted.org/packages/c4/08/608871f18bc18c6cba0b484e81fd25a023ef3ca6541f6793ec839fa49e1f/statsmodels-0.15.0-cp315-cp315t-win_amd64.whl", hash = "sha256:38038823fbe86f11e09433b4a0f4af5f102327c3137a1604b002ce3cf722a31f", size = 11549124, upload-time = "2026-08-30T16:05:53.179Z" },
     { url = "https://files.pythonhosted.org/packages/e3/eb/90a506dbee5cde669e2ef28565ff6b7a0791ab415eab2da82f92d033cccc/statsmodels-0.15.0-cp315-cp315t-win_arm64.whl", hash = "sha256:90df413d7e09474f7e7cbf8807440c1bf76298cdd9daabf9141f76d7627c9151", size = 11021454, upload-time = "2026-08-30T16:06:08.124Z" },
-]
-
-[[package]]
-name = "tabulate"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20d58e7ace7e5edfe65b849442b00ffcdd56be88697c6/tabulate-0.10.0.tar.gz", hash = "sha256:e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d", size = 91754, upload-time = "2026-03-04T18:55:34.402Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814, upload-time = "2026-03-04T18:55:31.284Z" },
 ]
 
 [[package]]
