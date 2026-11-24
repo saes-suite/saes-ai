@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Released]
+
+## [0.4.1] — 2026-11-24 (@rorro6787)
+
 ### Fixed
 - Automatically route default `localhost:11434` Ollama requests to `OLLAMA_HOST` / `http://host.docker.internal:11434` when running inside Docker (`SAES_IN_DOCKER=1` or `/.dockerenv`), and return an accurate host-connectivity status instead of `"Ollama is not installed"` when unreachable from a container.
-
-## [Released]
 
 ## [0.4.0] — 2026-11-24 (@rorro6787)
 
