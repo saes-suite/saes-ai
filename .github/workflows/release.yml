@@ -79,10 +79,10 @@ jobs:
 
       - name: Sync dependencies & lockfile
         run: |
-          if [ -d "../saesV2" ]; then
-            uv sync --extra dev --upgrade-package saesV2
+          if [ -d "../saes" ]; then
+            uv sync --extra dev --upgrade-package saes
           else
-            uv lock --upgrade-package saesV2 || true
+            uv lock --upgrade-package saes || true
           fi
 
       - name: Commit and push release changes

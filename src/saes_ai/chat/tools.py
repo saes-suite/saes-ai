@@ -1,6 +1,6 @@
 """Agent tool registry and execution engine for SAES-AI.
 
-Every tool delegates domain computation to the `saesV2` Python API and
+Every tool delegates domain computation to the `saes` Python API and
 returns structured JSON-serializable dictionaries for LLM consumption,
 while optionally emitting structured UI actions for `saes-ui`.
 """
@@ -8,6 +8,8 @@ while optionally emitting structured UI actions for `saes-ui`.
 from __future__ import annotations
 
 import base64
+import importlib
+import inspect
 import io
 import json
 from collections.abc import Callable
@@ -18,11 +20,11 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-import saesV2
-from saesV2.domain.models import Dataset
-from saesV2.io.csv_reader import CSVReader
-from saesV2.stats.ranking import BayesianRankingTest, FriedmanNemenyiTest
-from saesV2.validation.validator import REQUIRED_COLUMNS, DatasetValidator
+import saes
+from saes.domain.models import Dataset
+from saes.io.csv_reader import CSVReader
+from saes.stats.ranking import BayesianRankingTest, FriedmanNemenyiTest
+from saes.validation.validator import REQUIRED_COLUMNS, DatasetValidator
 
 MAX_SAMPLE_ROWS = 12
 MAX_ISSUES_IN_RESPONSE = 25
@@ -94,6 +96,26 @@ class ToolSpec:
 # ---------------------------------------------------------------------------
 
 
+def _filter_supported_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Forward only kwargs supported by the installed saes callable signature."""
+    sig = inspect.signature(fn)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+
+def _import_saes_server_helper(name: str, feature_label: str) -> Callable[..., Any]:
+    """Dynamically resolve a saes >= 2.0.0 orchestration helper without breaking 0.3.x builds."""
+    try:
+        mod = importlib.import_module("saes.server.helpers")
+        fn: Callable[..., Any] | None = getattr(mod, name, None)
+    except ImportError:
+        fn = None
+    if fn is None:
+        raise RuntimeError(f"{feature_label} requires saes >= 2.0.0.")
+    return fn
+
+
 def _sanitize_csv_filename(name: str) -> str:
     safe = Path(name.strip()).name
     if not safe:
@@ -135,10 +157,10 @@ def _load_validated_dataset(
     ctx: ToolContext,
     dataset_name: str | None = None,
 ) -> tuple[Dataset, str]:
-    """Load and validate a dataset via `saesV2`."""
+    """Load and validate a dataset via `saes`."""
     csv_text, fname, _ = _resolve_dataset_csv(ctx, dataset_name=dataset_name, use_staged=False)
-    dataset = saesV2.load(io.StringIO(csv_text))
-    report = saesV2.validate(dataset)
+    dataset = saes.load(io.StringIO(csv_text))
+    report = saes.validate(dataset)
     if not report.is_valid:
         errs = "; ".join(e.message for e in report.errors[:5])
         raise ValueError(
@@ -508,7 +530,7 @@ def _tool_explore_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
     dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
     metrics = args.get("metrics")
     alpha = float(args.get("alpha", ctx.alpha))
-    exp = saesV2.explore(dataset, metrics=metrics, alpha=alpha)
+    exp = saes.explore(dataset, metrics=metrics, alpha=alpha)
     diag = exp.context_diagnostics
 
     normality_summary: list[dict[str, Any]] = [
@@ -520,7 +542,8 @@ def _tool_explore_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
             "std": round(float(dp.std), 6),
             "median": round(float(dp.median), 6),
             "iqr": round(float(dp.iqr), 6),
-            "shapiro_p": getattr(dp, "shapiro_p_value", None),
+            "shapiro_p": getattr(dp, "shapiro_p", getattr(dp, "shapiro_p_value", None)),
+            "anderson_p": getattr(dp, "anderson_p", None),
             "is_normal": getattr(dp, "is_normal", None),
         }
         for dp in exp.distribution_profiles[:30]
@@ -534,6 +557,8 @@ def _tool_explore_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
             "suitability": r.suitability,
             "suitability_score": r.suitability_score,
             "suggested_table_type": r.suggested_table_type,
+            "target_tab": getattr(r, "target_tab", "stats"),
+            "target_mode": getattr(r, "target_mode", ""),
             "rationale": r.rationale,
             "assumptions_satisfied": r.assumptions_satisfied,
             "assumptions_violated": r.assumptions_violated,
@@ -550,6 +575,8 @@ def _tool_explore_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
         "runs_per_cell": diag.runs_per_cell,
         "is_paired": diag.is_paired,
         "is_balanced": diag.is_balanced,
+        "can_run_cell_tests": getattr(diag, "can_run_cell_tests", diag.runs_per_cell >= 2),
+        "can_run_blocked_omnibus": getattr(diag, "can_run_blocked_omnibus", diag.n_instances >= 2),
         "normality_passed_count": diag.normality_pass_count,
         "normality_total_checks": diag.normality_total_groups,
         "normality_rate": round(float(diag.normality_rate), 4),
@@ -561,7 +588,11 @@ def _tool_explore_dataset(ctx: ToolContext, args: dict[str, Any]) -> dict[str, A
 def _tool_run_statistical_analysis(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
     alpha = float(args.get("alpha", ctx.alpha))
-    report = saesV2.analyze(dataset, alpha=alpha, generate_plots=False)
+    paired = bool(args.get("paired", False))
+    analyze_kwargs = _filter_supported_kwargs(
+        saes.analyze, {"alpha": alpha, "generate_plots": False, "paired": paired}
+    )
+    report = saes.analyze(dataset, **analyze_kwargs)
 
     cells = []
     for cell in report.cell_analyses:
@@ -578,6 +609,8 @@ def _tool_run_statistical_analysis(ctx: ToolContext, args: dict[str, Any]) -> di
                     {
                         "name": res.effect_size.name,
                         "value": round(float(res.effect_size.value), 4),
+                        "ci_lower": getattr(res.effect_size, "ci_lower", None),
+                        "ci_upper": getattr(res.effect_size, "ci_upper", None),
                         "magnitude": res.effect_size.magnitude,
                     }
                     if res.effect_size
@@ -591,13 +624,14 @@ def _tool_run_statistical_analysis(ctx: ToolContext, args: dict[str, Any]) -> di
                     }
                     for a in res.assumptions
                 ],
-                "warnings": res.warnings,
+                "warnings": list(res.warnings),
             }
         )
 
     return {
         "filename": fname,
         "alpha": alpha,
+        "paired": paired,
         "cells_count": len(cells),
         "significant_cells_count": sum(1 for c in cells if c["is_significant"]),
         "cells": cells[:40],
@@ -611,18 +645,32 @@ def _tool_run_ranking_analysis(ctx: ToolContext, args: dict[str, Any]) -> dict[s
     scope = str(args.get("scope", "all-instances"))
     instance = args.get("instance")
     rope_percent = float(args.get("rope_percent", 1.0))
+    rope_abs = float(args["rope"]) if args.get("rope") is not None else None
+    prior_strength = float(args.get("prior_strength", 1.0))
 
     cd_res = FriedmanNemenyiTest().run(df=dataset.df, metric=metric, alpha=alpha, scope=scope, instance=instance)
-    bayes_res = BayesianRankingTest().run(
-        df=dataset.df, metric=metric, scope=scope, instance=instance, rope_percent=rope_percent
+    bayes_kwargs = _filter_supported_kwargs(
+        BayesianRankingTest.run,
+        {
+            "df": dataset.df,
+            "metric": metric,
+            "scope": scope,
+            "instance": instance,
+            "rope_percent": rope_percent,
+            "rope": rope_abs,
+            "prior_strength": prior_strength,
+        },
     )
+    bayes_res = BayesianRankingTest().run(**bayes_kwargs)
 
-    return {
+    out: dict[str, Any] = {
         "filename": fname,
         "metric": metric,
         "scope_label": cd_res.scope_label,
         "friedman_stat": round(float(cd_res.friedman_stat), 4),
         "friedman_p_value": float(cd_res.friedman_p_value),
+        "iman_davenport_f": round(float(cd_res.iman_davenport_f), 4),
+        "iman_davenport_p_value": float(cd_res.iman_davenport_p_value),
         "nemenyi_cd": round(float(cd_res.cd), 4),
         "ranks": [{"algorithm": r.algorithm, "avg_rank": round(float(r.avg_rank), 3)} for r in cd_res.ranks],
         "bayesian_ranking": [
@@ -636,6 +684,46 @@ def _tool_run_ranking_analysis(ctx: ToolContext, args: dict[str, Any]) -> dict[s
         ],
     }
 
+    # Include extended blocked omnibus & Plackett-Luce models when available in saes >= 2.0
+    stats_ns = getattr(saes, "statistics", None)
+    if stats_ns is not None:
+        for key, fn_name in (
+            ("friedman_aligned", "friedman_aligned_ranks"),
+            ("quade", "quade"),
+            ("rm_anova", "rm_anova"),
+        ):
+            fn = getattr(stats_ns, fn_name, None)
+            if fn is not None:
+                try:
+                    res = fn(dataset, metric=metric, alpha=alpha, scope=scope, instance=instance)
+                    out[key] = {
+                        "test_name": res.test_name,
+                        "statistic": round(float(res.statistic), 4),
+                        "p_value": float(res.p_value),
+                        "is_significant": bool(res.is_significant),
+                        "sphericity_epsilon": getattr(res, "sphericity_epsilon", None),
+                    }
+                except Exception:
+                    pass
+
+        pl_fn = getattr(stats_ns, "bayesian_plackett_luce", None)
+        if pl_fn is not None:
+            try:
+                pl_res = pl_fn(dataset, metric=metric, scope=scope, instance=instance)
+                out["bayesian_plackett_luce"] = [
+                    {
+                        "algorithm": it.algorithm,
+                        "prob_best_pct": round(float(it.prob_best) * 100, 2),
+                        "expected_rank": round(float(it.expected_rank), 3),
+                        "ci_95": [round(float(it.rank_ci_lower), 3), round(float(it.rank_ci_upper), 3)],
+                    }
+                    for it in pl_res.items
+                ]
+            except Exception:
+                pass
+
+    return out
+
 
 def _tool_generate_statistical_table(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
@@ -645,19 +733,24 @@ def _tool_generate_statistical_table(ctx: ToolContext, args: dict[str, Any]) -> 
     posthoc = str(args.get("posthoc_correction", "holm"))
     ref_algo = args.get("reference_algorithm")
     alpha = float(args.get("alpha", ctx.alpha))
+    paired = bool(args.get("paired", False))
 
-    table = saesV2.generate_table(
-        dataset,
-        metric=metric,
-        table_type=table_type,
-        test_type=test_type,
-        posthoc_correction=posthoc,
-        reference_algorithm=ref_algo,
-        alpha=alpha,
+    table_kwargs = _filter_supported_kwargs(
+        saes.generate_table,
+        {
+            "metric": metric,
+            "table_type": table_type,
+            "test_type": test_type,
+            "posthoc_correction": posthoc,
+            "reference_algorithm": ref_algo,
+            "alpha": alpha,
+            "paired": paired,
+        },
     )
-    md_export = saesV2.export_table(table, export_format="markdown")
+    table = saes.generate_table(dataset, **table_kwargs)
+    md_export = saes.export_table(table, export_format="markdown")
     md_text = md_export.decode("utf-8", errors="replace") if isinstance(md_export, bytes) else str(md_export)
-    csv_export = saesV2.export_table(table, export_format="csv")
+    csv_export = saes.export_table(table, export_format="csv")
     csv_text = csv_export.decode("utf-8", errors="replace") if isinstance(csv_export, bytes) else str(csv_export)
 
     subtitle = (
@@ -704,7 +797,13 @@ def _tool_generate_plot(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     if metric not in dataset.metrics:
         raise ValueError(f"Metric '{metric}' not found in '{fname}'. Available metrics: {dataset.metrics}")
 
-    is_ranking = plot_type in {"critical-distance", "bayesian-rank", "bayesian-sign", "bayesian-signed-rank"}
+    is_ranking = plot_type in {
+        "critical-distance",
+        "bayesian-rank",
+        "bayesian-sign",
+        "bayesian-signed-rank",
+        "plackett-luce",
+    }
     scope = str(args.get("scope", "all-instances" if is_ranking else "single-instance"))
     instance = args.get("instance")
     if not instance and (not is_ranking or scope != "all-instances"):
@@ -715,10 +814,14 @@ def _tool_generate_plot(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
     palette = args.get("palette")
 
     plot_kwargs: dict[str, Any] = {"alpha": alpha, "scope": scope, "rope_percent": rope_percent}
+    if args.get("rope") is not None:
+        plot_kwargs["rope"] = float(args["rope"])
+    if args.get("prior_strength") is not None:
+        plot_kwargs["prior_strength"] = float(args["prior_strength"])
     if palette:
         plot_kwargs["palette"] = str(palette)
 
-    fig_plotly = saesV2.plot(
+    fig_plotly = saes.plot(
         dataset,
         plot_type=plot_type,
         metric=metric,
@@ -730,7 +833,7 @@ def _tool_generate_plot(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
 
     image_data_url: str | None = None
     try:
-        png_bytes, _, _ = saesV2.export_plot(
+        png_bytes, _, _ = saes.export_plot(
             dataset,
             plot_type=plot_type,
             metric=metric,
@@ -752,6 +855,8 @@ def _tool_generate_plot(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any
         "bayesian-rank": "Bayesian Posterior Rank Plot",
         "bayesian-sign": "Bayesian Sign Test Simplex",
         "bayesian-signed-rank": "Bayesian Signed-Rank Simplex",
+        "plackett-luce": "Bayesian Plackett-Luce Posterior Ranking",
+        "effect-size-forest": "Standardized Effect-Size Forest Plot (95% CI)",
         "barplot": "Bar Plot",
         "lineplot": "Line Plot",
         "ecdf": "ECDF Plot",
@@ -797,12 +902,25 @@ def _tool_compute_performance_profiles(ctx: ToolContext, args: dict[str, Any]) -
     dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
     metric = str(args["metric"])
     alpha = float(args.get("alpha", ctx.alpha))
-    prof = saesV2.compute_performance_profiles(dataset, metric=metric, alpha=alpha)
+    paired = bool(args.get("paired", False))
+    posthoc_correction = str(args.get("posthoc_correction", "holm"))
+    prof_kwargs = _filter_supported_kwargs(
+        saes.compute_performance_profiles,
+        {
+            "metric": metric,
+            "alpha": alpha,
+            "paired": paired,
+            "posthoc_correction": posthoc_correction,
+        },
+    )
+    prof = saes.compute_performance_profiles(dataset, **prof_kwargs)
 
     return {
         "filename": fname,
         "metric": metric,
         "maximize": prof.maximize,
+        "paired": paired,
+        "posthoc_correction": posthoc_correction,
         "curves_summary": [
             {
                 "algorithm": c.algorithm,
@@ -831,14 +949,21 @@ def _tool_analyze_statistical_power(ctx: ToolContext, args: dict[str, Any]) -> d
     metric = str(args["metric"])
     target_power = float(args.get("target_power", 0.8))
     alpha = float(args.get("alpha", ctx.alpha))
+    paired = bool(args.get("paired", False))
 
-    pwr = saesV2.analyze_statistical_power(dataset, metric=metric, target_power=target_power, alpha=alpha)
+    pwr_kwargs = _filter_supported_kwargs(
+        saes.analyze_statistical_power,
+        {"metric": metric, "target_power": target_power, "alpha": alpha, "paired": paired},
+    )
+    pwr = saes.analyze_statistical_power(dataset, **pwr_kwargs)
+    sensitivity_items = getattr(pwr, "sensitivity_audit", []) or []
     return {
         "filename": fname,
         "metric": metric,
         "alpha": pwr.alpha,
         "target_power": pwr.target_power,
         "target_effect_size": pwr.target_effect_size,
+        "paired": paired,
         "overall_power_health": pwr.overall_power_health,
         "sample_size_recommendations": [
             {
@@ -851,13 +976,109 @@ def _tool_analyze_statistical_power(ctx: ToolContext, args: dict[str, Any]) -> d
             for s in pwr.sample_size_recommendations[:10]
         ],
         "post_hoc_audit_count": len(pwr.post_hoc_audit),
+        "sensitivity_mdes_preview": [
+            {
+                "instance": it.instance,
+                "comparison": f"{it.algo_1} vs {it.algo_2}",
+                "n_samples": it.n_samples,
+                "mdes_cohens_d": round(float(it.mdes_cohens_d), 4),
+                "observed_cohens_d": round(float(it.observed_cohens_d), 4),
+            }
+            for it in sensitivity_items[:15]
+        ],
     }
+
+
+def _tool_run_posthoc_analysis(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
+    run_posthoc_for_dataset = _import_saes_server_helper("run_posthoc_for_dataset", "Post-hoc analysis")
+
+    res = run_posthoc_for_dataset(
+        dataset=dataset,
+        metric=args.get("metric"),
+        instance=args.get("instance"),
+        method=str(args.get("method", "auto")),
+        control=args.get("control"),
+        p_adjust=str(args.get("p_adjust", "holm")),
+        alpha=float(args.get("alpha", ctx.alpha)),
+    )
+    return {
+        "filename": fname,
+        "method": res.method,
+        "p_adjust": res.p_adjust,
+        "alpha": res.alpha,
+        "significant_pairs": sum(1 for c in res.comparisons if c.is_significant),
+        "total_pairs": len(res.comparisons),
+        "comparisons": [c.model_dump() for c in res.comparisons[:40]],
+        "warnings": list(res.warnings),
+    }
+
+
+def _tool_run_tost_equivalence(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
+    run_tost_for_dataset = _import_saes_server_helper("run_tost_for_dataset", "TOST equivalence testing")
+
+    res = run_tost_for_dataset(
+        dataset=dataset,
+        metric=args.get("metric"),
+        algo_a=args.get("algo_a"),
+        algo_b=args.get("algo_b"),
+        low_eqbound=float(args.get("low_eqbound", 0.05)),
+        high_eqbound=float(args["high_eqbound"]) if args.get("high_eqbound") is not None else None,
+        scope=str(args.get("scope", "single-instance")),
+        instance=args.get("instance"),
+        alpha=float(args.get("alpha", ctx.alpha)),
+        paired=bool(args.get("paired", False)),
+        equal_var=bool(args.get("equal_var", False)),
+    )
+    return {"filename": fname, **res.model_dump()}
+
+
+def _tool_run_bayesian_correlated_ttest(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
+    run_bayesian_correlated_t_for_dataset = _import_saes_server_helper(
+        "run_bayesian_correlated_t_for_dataset", "Bayesian correlated t-test"
+    )
+
+    res = run_bayesian_correlated_t_for_dataset(
+        dataset=dataset,
+        metric=args.get("metric"),
+        algo_a=args.get("algo_a"),
+        algo_b=args.get("algo_b"),
+        scope=str(args.get("scope", "single-instance")),
+        instance=args.get("instance"),
+        rope=float(args.get("rope", 0.01)),
+        rho=float(args["rho"]) if args.get("rho") is not None else None,
+    )
+    dumped = res.model_dump(exclude={"curve_x", "curve_y"})
+    return {"filename": fname, **dumped}
+
+
+def _tool_compute_effect_size_forest(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
+    stats_ns = getattr(saes, "statistics", None)
+    forest_fn = getattr(stats_ns, "effect_size_forest", None) if stats_ns is not None else None
+    if forest_fn is None:
+        raise RuntimeError("Effect-size forest requires saes >= 2.0.0.")
+
+    metric = str(args.get("metric") or (dataset.metrics[0] if dataset.metrics else "value"))
+    res = forest_fn(
+        dataset=dataset,
+        metric=metric,
+        scope=str(args.get("scope", "single-instance")),
+        instance=args.get("instance"),
+        reference_algorithm=args.get("reference_algorithm"),
+        alpha=float(args.get("alpha", ctx.alpha)),
+        paired=bool(args.get("paired", False)),
+        p_adjust=str(args.get("p_adjust", "holm")),
+    )
+    return {"filename": fname, **res.model_dump()}
 
 
 def _tool_generate_reproducibility(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     dataset, fname = _load_validated_dataset(ctx, dataset_name=args.get("dataset_name"))
     alpha = float(args.get("alpha", ctx.alpha))
-    repro = saesV2.generate_reproducibility_artifacts(dataset, alpha=alpha)
+    repro = saes.generate_reproducibility_artifacts(dataset, alpha=alpha)
     return {
         "filename": fname,
         "environment": {
@@ -1053,13 +1274,20 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
         name="run_statistical_analysis",
         description=(
             "Run SAES automated statistical hypothesis testing across all experimental cells "
-            "(t-tests, Welch, ANOVA) with effect sizes and assumption checks."
+            "(parametric & non-parametric) with exact effect-size 95% CIs and assumption checks."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "dataset_name": {"type": "string"},
                 "alpha": {"type": "number", "default": 0.05},
+                "paired": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false (independent stochastic runs). Set true only for matched CV folds/CRN."
+                    ),
+                    "default": False,
+                },
             },
             "required": [],
         },
@@ -1068,8 +1296,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="run_ranking_analysis",
         description=(
-            "Run Friedman + Nemenyi Critical Distance and Bayesian Posterior Ranking "
-            "across algorithms for a specific metric."
+            "Run blocked multi-instance omnibus tests (Friedman + Nemenyi CD, Iman-Davenport, "
+            "Friedman Aligned-Ranks, Quade, RM-ANOVA GG) and Bayesian ranking (Simplex ROPE & Plackett-Luce)."
         ),
         parameters={
             "type": "object",
@@ -1080,6 +1308,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                 "scope": {"type": "string", "enum": ["all-instances", "single-instance"], "default": "all-instances"},
                 "instance": {"type": "string"},
                 "rope_percent": {"type": "number", "default": 1.0},
+                "rope": {"type": "number", "description": "Optional exact absolute ROPE half-width in metric units."},
+                "prior_strength": {"type": "number", "default": 1.0},
             },
             "required": ["metric"],
         },
@@ -1088,8 +1318,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="generate_statistical_table",
         description=(
-            "Generate publication-grade statistical benchmark tables (Friedman, Wilcoxon, "
-            "Kruskal, ANOVA, Welch, t-test) with post-hoc corrections."
+            "Generate publication-grade statistical benchmark tables (Friedman, Aligned-Ranks, Quade, "
+            "RM-ANOVA, Brunner-Munzel, Wilcoxon, Kruskal, ANOVA, Welch, t-test) with 13 multiplicity adjustments."
         ),
         parameters={
             "type": "object",
@@ -1106,8 +1336,12 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                     "enum": [
                         "auto",
                         "wilcoxon",
+                        "brunner_munzel",
                         "mann_whitney",
                         "friedman",
+                        "friedman_aligned",
+                        "quade",
+                        "rm_anova",
                         "kruskal",
                         "anova_oneway",
                         "anova_welch",
@@ -1119,11 +1353,26 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                 },
                 "posthoc_correction": {
                     "type": "string",
-                    "enum": ["holm", "bonferroni", "hochberg", "fdr_bh", "none"],
+                    "enum": [
+                        "holm",
+                        "bonferroni",
+                        "hochberg",
+                        "hommel",
+                        "finner",
+                        "holland",
+                        "rom",
+                        "li",
+                        "fdr_bh",
+                        "fdr_by",
+                        "shaffer",
+                        "bergmann_hommel",
+                        "none",
+                    ],
                     "default": "holm",
                 },
                 "reference_algorithm": {"type": "string"},
                 "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
             },
             "required": ["metric"],
         },
@@ -1132,10 +1381,9 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="generate_plot",
         description=(
-            "Generate a SAES statistical plot, diagram, or image (boxplot, violin, "
-            "critical-distance, bayesian-rank, bayesian-sign, bayesian-signed-rank, "
-            "barplot, lineplot, ecdf, scatter) and display it directly inside the chatbot "
-            "with PNG, SVG, and PDF download options."
+            "Generate a SAES statistical plot, diagram, or image (boxplot, violin, critical-distance, "
+            "bayesian-rank, bayesian-sign, bayesian-signed-rank, plackett-luce, effect-size-forest, "
+            "barplot, lineplot, ecdf, scatter) and display it directly inside the chatbot with PNG/SVG/PDF downloads."
         ),
         parameters={
             "type": "object",
@@ -1149,6 +1397,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                         "bayesian-rank",
                         "bayesian-sign",
                         "bayesian-signed-rank",
+                        "plackett-luce",
+                        "effect-size-forest",
                         "barplot",
                         "lineplot",
                         "ecdf",
@@ -1164,6 +1414,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                 },
                 "alpha": {"type": "number", "default": 0.05},
                 "rope_percent": {"type": "number", "default": 1.0},
+                "rope": {"type": "number"},
+                "prior_strength": {"type": "number"},
                 "palette": {"type": "string"},
                 "dataset_name": {"type": "string"},
             },
@@ -1172,17 +1424,113 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
         handler=_tool_generate_plot,
     ),
     ToolSpec(
+        name="run_posthoc_analysis",
+        description=(
+            "Run cell-level multiple-comparison post-hoc tests (auto, tukey_hsd, games_howell, "
+            "dunnett vs control, dunn, conover_iman) with exact 95% CIs and FWER/FDR adjustments."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "dataset_name": {"type": "string"},
+                "metric": {"type": "string"},
+                "instance": {"type": "string"},
+                "method": {
+                    "type": "string",
+                    "enum": ["auto", "tukey_hsd", "games_howell", "dunnett", "dunn", "conover_iman"],
+                    "default": "auto",
+                },
+                "control": {"type": "string", "description": "Control baseline algorithm for Dunnett's test."},
+                "p_adjust": {"type": "string", "default": "holm"},
+                "alpha": {"type": "number", "default": 0.05},
+            },
+            "required": [],
+        },
+        handler=_tool_run_posthoc_analysis,
+    ),
+    ToolSpec(
+        name="run_tost_equivalence",
+        description=(
+            "Run Schuirmann (1987) / Lakens (2017) Two One-Sided Tests (TOST) to test formal "
+            "statistical equivalence between two algorithms within [-delta, +delta]."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "dataset_name": {"type": "string"},
+                "metric": {"type": "string"},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "low_eqbound": {"type": "number", "default": 0.05},
+                "high_eqbound": {"type": "number"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
+                "equal_var": {"type": "boolean", "default": False},
+            },
+            "required": ["metric"],
+        },
+        handler=_tool_run_tost_equivalence,
+    ),
+    ToolSpec(
+        name="run_bayesian_correlated_ttest",
+        description=(
+            "Run the Nadeau & Bengio (2003) / Benavoli et al. (2017) Bayesian Correlated t-test "
+            "for overlapping k-fold cross-validation or paired benchmark differences with ROPE."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "dataset_name": {"type": "string"},
+                "metric": {"type": "string"},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "rope": {"type": "number", "default": 0.01},
+                "rho": {"type": "number", "description": "CV correlation n_test/n_train (e.g., 0.111 for 10-fold CV)."},
+            },
+            "required": ["metric"],
+        },
+        handler=_tool_run_bayesian_correlated_ttest,
+    ),
+    ToolSpec(
+        name="compute_effect_size_forest",
+        description=(
+            "Compute pairwise standardized effect sizes (Hedges' g, Cohen's d, Vargha-Delaney A12, "
+            "Cliff's delta) with exact 95% confidence intervals against a reference baseline."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "dataset_name": {"type": "string"},
+                "metric": {"type": "string"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "reference_algorithm": {"type": "string"},
+                "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
+                "p_adjust": {"type": "string", "default": "holm"},
+            },
+            "required": ["metric"],
+        },
+        handler=_tool_compute_effect_size_forest,
+    ),
+    ToolSpec(
         name="compute_performance_profiles",
         description=(
-            "Compute Dolan-Moré performance profiles, AUC, win-tie-loss matrix, "
-            "and global meta-ranking for a metric."
+            "Compute Dolan-Moré performance profiles, efficiency/robustness, multiplicity-adjusted "
+            "win-tie-loss matrix, and Copeland meta-ranking for a metric."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "metric": {"type": "string"},
                 "dataset_name": {"type": "string"},
-                "maximize": {"type": "boolean"},
+                "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
+                "posthoc_correction": {"type": "string", "default": "holm"},
             },
             "required": ["metric"],
         },
@@ -1191,8 +1539,8 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="analyze_statistical_power",
         description=(
-            "Analyze achieved statistical power and compute recommended sample size "
-            "(runs per cell) for a metric."
+            "Analyze statistical power, a priori sample sizes, and Minimum Detectable Effect Size "
+            "(MDES) sensitivity audits for a metric."
         ),
         parameters={
             "type": "object",
@@ -1201,6 +1549,7 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
                 "dataset_name": {"type": "string"},
                 "target_power": {"type": "number", "default": 0.8},
                 "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
             },
             "required": ["metric"],
         },

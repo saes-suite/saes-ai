@@ -12,7 +12,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project --extra providers
 
 COPY src ./src
-RUN uv sync --no-dev --no-editable --extra providers --upgrade-package saesV2
+RUN uv sync --no-dev --no-editable --extra providers --upgrade-package saes
 
 ENV PATH="/app/.venv/bin:$PATH"
 

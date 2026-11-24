@@ -12,7 +12,7 @@ authors = [
     { name = "SAES Team" }
 ]
 dependencies = [
-    "saesV2[viz]>=0.1.0",
+    "saes[viz]>=2.0.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
     "pydantic>=2.0.0",

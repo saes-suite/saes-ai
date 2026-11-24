@@ -90,11 +90,13 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
                         "violin",
                         "critical-distance",
                         "bayesian-rank",
+                        "plackett-luce",
+                        "effect-size-forest",
                         "barplot",
                         "ecdf",
-                        "scatterplot",
+                        "scatter",
                     ],
-                    "description": "Type of distribution or ranking plot to generate.",
+                    "description": "Type of distribution, ranking, Bayesian, or effect-size plot to generate.",
                 },
                 "instance": {"type": "string", "description": "Problem instance identifier."},
                 "metric": {"type": "string", "description": "Metric name."},
@@ -140,8 +142,12 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
                     "enum": [
                         "auto",
                         "wilcoxon",
+                        "brunner_munzel",
                         "mann_whitney",
                         "friedman",
+                        "friedman_aligned",
+                        "quade",
+                        "rm_anova",
                         "kruskal",
                         "anova_oneway",
                         "anova_welch",
@@ -153,11 +159,26 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
                 },
                 "posthoc_correction": {
                     "type": "string",
-                    "enum": ["holm", "bonferroni", "hochberg", "fdr_bh", "none"],
+                    "enum": [
+                        "holm",
+                        "bonferroni",
+                        "hochberg",
+                        "hommel",
+                        "finner",
+                        "holland",
+                        "rom",
+                        "li",
+                        "fdr_bh",
+                        "fdr_by",
+                        "shaffer",
+                        "bergmann_hommel",
+                        "none",
+                    ],
                     "default": "holm",
                 },
                 "reference_algorithm": {"type": "string", "description": "Control/reference algorithm name."},
                 "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
             },
             "required": ["file_path", "metric"],
         },
@@ -166,7 +187,8 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
         name="explore_dataset_distributions",
         description=(
             "Explore dataset observations, reveal multi-metric pivots, evaluate normality (Shapiro-Wilk, "
-            "D'Agostino, KS) and homoscedasticity (Levene, Bartlett), and get smart statistical test recommendations."
+            "D'Agostino, Lilliefors KS, Anderson-Darling) and homoscedasticity (Levene, Bartlett), "
+            "and get smart statistical test recommendations."
         ),
         parameters_schema={
             "type": "object",
@@ -178,6 +200,96 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
                 "alpha": {"type": "number", "default": 0.05},
             },
             "required": ["file_path"],
+        },
+    ),
+    MCPToolSpec(
+        name="run_posthoc_analysis",
+        description=(
+            "Run cell-level multiple-comparison post-hoc procedures (auto, tukey_hsd, games_howell, "
+            "dunnett vs control, dunn, conover_iman) with exact 95% CIs and FWER/FDR adjustments."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string"},
+                "instance": {"type": "string"},
+                "method": {
+                    "type": "string",
+                    "enum": ["auto", "tukey_hsd", "games_howell", "dunnett", "dunn", "conover_iman"],
+                    "default": "auto",
+                },
+                "control": {"type": "string"},
+                "p_adjust": {"type": "string", "default": "holm"},
+                "alpha": {"type": "number", "default": 0.05},
+            },
+            "required": ["file_path"],
+        },
+    ),
+    MCPToolSpec(
+        name="run_tost_equivalence",
+        description=(
+            "Run Schuirmann (1987) / Lakens (2017) Two One-Sided Tests (TOST) to evaluate formal "
+            "statistical equivalence between two algorithms within [-delta, +delta]."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string"},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "low_eqbound": {"type": "number", "default": 0.05},
+                "high_eqbound": {"type": "number"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
+                "equal_var": {"type": "boolean", "default": False},
+            },
+            "required": ["file_path", "metric"],
+        },
+    ),
+    MCPToolSpec(
+        name="run_bayesian_correlated_ttest",
+        description=(
+            "Run Nadeau & Bengio (2003) / Benavoli et al. (2017) Bayesian Correlated t-test "
+            "for overlapping k-fold cross-validation or paired benchmark differences with ROPE."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string"},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "rope": {"type": "number", "default": 0.01},
+                "rho": {"type": "number"},
+            },
+            "required": ["file_path", "metric"],
+        },
+    ),
+    MCPToolSpec(
+        name="compute_effect_size_forest",
+        description=(
+            "Compute standardized effect sizes (Hedges' g, Cohen's d, Vargha-Delaney A12, Cliff's delta) "
+            "with exact 95% confidence intervals against a reference baseline."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Path to benchmark CSV."},
+                "metric": {"type": "string"},
+                "scope": {"type": "string", "enum": ["single-instance", "all-instances"], "default": "single-instance"},
+                "instance": {"type": "string"},
+                "reference_algorithm": {"type": "string"},
+                "alpha": {"type": "number", "default": 0.05},
+                "paired": {"type": "boolean", "default": False},
+                "p_adjust": {"type": "string", "default": "holm"},
+            },
+            "required": ["file_path", "metric"],
         },
     ),
 ]

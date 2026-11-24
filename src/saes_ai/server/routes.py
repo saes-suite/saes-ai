@@ -6,10 +6,10 @@ import logging
 from collections.abc import Generator
 from pathlib import Path
 
-import saesV2
+import saes
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from saesV2.server.storage import get_datasets_dir
+from saes.server.storage import get_datasets_dir
 
 from saes_ai.chat.agent import StatisticalChatAgent
 from saes_ai.chat.tools import ToolContext
@@ -84,10 +84,10 @@ def _build_agent_for_request(req: ChatRequest) -> tuple[StatisticalChatAgent, bo
             safe_name = Path(req.dataset_name).name
             file_path = datasets_dir / safe_name
             if file_path.exists() and file_path.is_file():
-                dataset = saesV2.load(file_path)
-                val = saesV2.validate(dataset)
+                dataset = saes.load(file_path)
+                val = saes.validate(dataset)
                 if val.is_valid:
-                    report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                    report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
                 else:
                     logger.debug("Dataset %s failed validation: %s", safe_name, val.errors)
         except Exception as exc:
@@ -95,10 +95,10 @@ def _build_agent_for_request(req: ChatRequest) -> tuple[StatisticalChatAgent, bo
 
     if dataset is None and req.csv_data:
         try:
-            dataset = saesV2.load(io.StringIO(req.csv_data))
-            val = saesV2.validate(dataset)
+            dataset = saes.load(io.StringIO(req.csv_data))
+            val = saes.validate(dataset)
             if val.is_valid:
-                report = saesV2.analyze(dataset, alpha=req.alpha, generate_plots=False)
+                report = saes.analyze(dataset, alpha=req.alpha, generate_plots=False)
         except Exception as exc:
             logger.debug("Failed loading inline csv_data: %s", exc)
 

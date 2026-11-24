@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Migrated core statistical dependency from `saesV2` to canonical **`saes[viz]>=2.0.0`** (`import saes`), updating `pyproject.toml`, `Dockerfile`, release workflows, and all agent/server/test modules.
+
+### Added
+- Exposed full `saes` 2.0 statistical and visualization parity in `saes_ai.chat.tools`, `prompts.py`, and `mcp/tools.py`: new agent tools `run_posthoc_analysis` (Tukey HSD, Games–Howell, Dunnett, Dunn, Conover–Iman), `run_tost_equivalence` (Schuirmann TOST), `run_bayesian_correlated_ttest` (Nadeau–Bengio CV correlation), and `compute_effect_size_forest` (95% CIs); added `plackett-luce` and `effect-size-forest` to `generate_plot`; added Friedman Aligned-Ranks, Quade, RM-ANOVA (GG $\varepsilon$), and Plackett–Luce outputs to `run_ranking_analysis`; added explicit `paired=False` support, all 13 multiplicity adjustments, MDES sensitivity summaries, and Anderson–Darling / design-capability fields.
+
 ## [Released]
 
 ## [0.3.2] — 2026-11-20 (@rorro6787)
