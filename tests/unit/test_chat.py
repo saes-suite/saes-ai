@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import saes
 
-from saes_ai.chat.agent import DEFAULT_OLLAMA_NUM_CTX, StatisticalChatAgent, _extract_think_blocks
+from saes_ai.chat.agent import (
+    DEFAULT_OLLAMA_NUM_CTX,
+    StatisticalChatAgent,
+    _extract_think_blocks,
+    _resolve_ollama_base_url,
+)
 from saes_ai.chat.context import build_analysis_context
 
 SAMPLE_CSV = """algorithm,instance,metric,run_id,value,maximize
@@ -221,3 +226,33 @@ def test_local_ollama_truncation_and_empty_response_handling(monkeypatch: Any) -
     events2 = list(agent.stream_events("Hello"))
     tokens2 = "".join(e["token"] for e in events2 if e["type"] == "token")
     assert "Here is the answer." in tokens2
+
+
+def test_resolve_ollama_base_url_docker_and_env(monkeypatch: Any) -> None:
+    monkeypatch.delenv("SAES_IN_DOCKER", raising=False)
+    monkeypatch.delenv("SAES_OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    # Host defaults
+    assert _resolve_ollama_base_url(None) == "http://localhost:11434"
+    assert _resolve_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
+    assert _resolve_ollama_base_url("http://192.168.1.50:11434") == "http://192.168.1.50:11434"
+
+    # Explicit OLLAMA_HOST overrides default loopback 11434, but preserves custom remote hosts
+    monkeypatch.setenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    assert _resolve_ollama_base_url("http://localhost:11434") == "http://host.docker.internal:11434"
+    assert _resolve_ollama_base_url("http://192.168.1.50:11434") == "http://192.168.1.50:11434"
+    assert _resolve_ollama_base_url("http://127.0.0.1:99999") == "http://127.0.0.1:99999"
+
+    # Docker auto-rewrite without OLLAMA_HOST
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setenv("SAES_IN_DOCKER", "1")
+    assert _resolve_ollama_base_url(None) == "http://host.docker.internal:11434"
+    assert _resolve_ollama_base_url("http://localhost:11434") == "http://host.docker.internal:11434"
+    assert _resolve_ollama_base_url("http://127.0.0.1:11434/v1") == "http://host.docker.internal:11434/v1"
+
+    # Probe inside Docker reports offline host Ollama instead of 'not_installed'
+    res = StatisticalChatAgent.probe_provider("local", base_url="http://127.0.0.1:99999")
+    assert res["status"] == "offline"
+    assert "Docker" in res["message"]
+    assert res["can_start_ollama"] is False

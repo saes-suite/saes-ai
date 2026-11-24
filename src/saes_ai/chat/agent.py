@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from saes.app.pipeline import AnalysisReport
@@ -34,6 +35,43 @@ def _get_ollama_num_ctx() -> int:
     if raw.isdigit() and int(raw) > 0:
         return int(raw)
     return DEFAULT_OLLAMA_NUM_CTX
+
+
+def _is_running_in_docker() -> bool:
+    """Return True when running inside a Docker container."""
+    return os.getenv("SAES_IN_DOCKER") == "1" or Path("/.dockerenv").exists()
+
+
+def _resolve_ollama_base_url(base_url: str | None = None) -> str:
+    """Resolve the Ollama base URL, routing loopback to host.docker.internal inside Docker."""
+    env_url = (os.getenv("SAES_OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or "").strip()
+    if env_url and "://" not in env_url:
+        env_url = f"http://{env_url}"
+    env_url = env_url.rstrip("/")
+
+    raw = (base_url or "").strip()
+    if not raw:
+        if env_url:
+            return env_url
+        return "http://host.docker.internal:11434" if _is_running_in_docker() else "http://localhost:11434"
+
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parsed = urlsplit(raw)
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+        try:
+            port = parsed.port
+        except ValueError:
+            return raw.rstrip("/")
+        if env_url and port in (None, 11434):
+            return env_url
+        if _is_running_in_docker() and port in (None, 11434):
+            netloc = f"host.docker.internal:{port}" if port else "host.docker.internal"
+            return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+
+    return raw.rstrip("/")
 
 
 def _sanitize_error_message(exc: Exception) -> str:
@@ -645,7 +683,7 @@ class StatisticalChatAgent:
             return
 
         selected_model = self.model.strip()
-        clean_url = (self.base_url or "http://localhost:11434").rstrip("/")
+        clean_url = _resolve_ollama_base_url(self.base_url)
         if clean_url.endswith("/v1"):
             # OpenAI-compatible local server
             old_base = self.base_url
@@ -822,7 +860,7 @@ class StatisticalChatAgent:
     @staticmethod
     def fetch_local_models(base_url: str = "http://localhost:11434") -> list[str]:
         """Fetch available models from a local Ollama server."""
-        clean_url = (base_url or "http://localhost:11434").rstrip("/")
+        clean_url = _resolve_ollama_base_url(base_url)
         try:
             with httpx.Client(timeout=3.0) as client:
                 res = client.get(f"{clean_url}/api/tags")
@@ -866,7 +904,7 @@ class StatisticalChatAgent:
         prov = (provider or "local").lower().strip()
 
         if prov == "local":
-            clean_url = (base_url or "http://localhost:11434").rstrip("/")
+            clean_url = _resolve_ollama_base_url(base_url)
             models = StatisticalChatAgent.fetch_local_models(clean_url)
             if models:
                 return {
@@ -887,6 +925,17 @@ class StatisticalChatAgent:
                         }
             except Exception:
                 pass
+
+            if _is_running_in_docker():
+                return {
+                    "status": "offline",
+                    "models": [],
+                    "message": (
+                        f"Could not reach Ollama from Docker at {clean_url}. "
+                        "Make sure Ollama is running on your host machine."
+                    ),
+                    "can_start_ollama": False,
+                }
 
             binary = shutil.which("ollama")
             if not binary:
@@ -1014,7 +1063,7 @@ class StatisticalChatAgent:
     @staticmethod
     def pull_ollama_model(name: str, base_url: str = "http://localhost:11434") -> dict[str, str]:
         """Request the local Ollama daemon to download/pull a model."""
-        clean_url = (base_url or "http://localhost:11434").rstrip("/")
+        clean_url = _resolve_ollama_base_url(base_url)
         clean_name = name.strip()
         if not clean_name:
             return {"status": "error", "message": "Model name cannot be empty."}
@@ -1039,7 +1088,7 @@ class StatisticalChatAgent:
         base_url: str = "http://localhost:11434",
     ) -> Iterator[str]:
         """Stream progress chunks of Ollama model pull."""
-        clean_url = (base_url or "http://localhost:11434").rstrip("/")
+        clean_url = _resolve_ollama_base_url(base_url)
         clean_name = name.strip()
         if not clean_name:
             yield json.dumps({"status": "error", "error": "Model name cannot be empty."}) + "\n"
