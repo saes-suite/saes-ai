@@ -7,12 +7,16 @@ from saes_ai.mcp.tools import SAES_MCP_TOOLS
 
 
 def test_mcp_tools_spec() -> None:
-    assert len(SAES_MCP_TOOLS) >= 4
+    assert len(SAES_MCP_TOOLS) >= 11
     tool_names = [t.name for t in SAES_MCP_TOOLS]
     assert "validate_benchmark_csv" in tool_names
     assert "run_statistical_analysis" in tool_names
     assert "check_assumptions" in tool_names
     assert "generate_distribution_plot" in tool_names
+    assert "run_posthoc_analysis" in tool_names
+    assert "run_tost_equivalence" in tool_names
+    assert "run_bayesian_correlated_ttest" in tool_names
+    assert "compute_effect_size_forest" in tool_names
 
 
 def test_mcp_server_skeleton() -> None:

@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
+import saes
 from fastapi.testclient import TestClient
 
 from saes_ai.chat.agent import StatisticalChatAgent
-from saes_ai.chat.tools import ToolContext, execute_tool
+from saes_ai.chat.tools import TOOL_REGISTRY, ToolContext, execute_tool
 from saes_ai.server.app import create_app
 
 
@@ -201,3 +202,72 @@ def test_generate_plot_and_table_artifacts(tmp_path: Path, monkeypatch: object) 
         },
     )
     assert res_chat.status_code == 200
+
+
+def _sample_three_algo_csv() -> str:
+    rows = ["algorithm,instance,metric,run_id,value,maximize"]
+    for idx, inst in enumerate(("ZDT1", "ZDT2", "ZDT3")):
+        offset = idx * 0.02
+        for run_id in range(6):
+            jitter = (run_id - 2.5) * 0.008
+            rows.append(f"NSGA-II,{inst},HV,{run_id},{0.84 + offset + jitter:.4f},true")
+            rows.append(f"MOEA/D,{inst},HV,{run_id},{0.76 + offset + jitter * 1.1:.4f},true")
+            rows.append(f"SPEA2,{inst},HV,{run_id},{0.70 + offset + jitter * 0.9:.4f},true")
+    return "\n".join(rows) + "\n"
+
+
+def test_extended_statistical_tools_parity_and_compat(tmp_path: Path) -> None:
+    expected_tools = {
+        "run_posthoc_analysis",
+        "run_tost_equivalence",
+        "run_bayesian_correlated_ttest",
+        "compute_effect_size_forest",
+    }
+    assert expected_tools.issubset(TOOL_REGISTRY.keys())
+
+    ctx = ToolContext(datasets_dir=tmp_path)
+    execute_tool(ctx, "create_dataset", {"filename": "multi.csv", "csv_content": _sample_three_algo_csv()})
+
+    has_v04 = hasattr(getattr(saes, "statistics", None), "effect_size_forest")
+
+    ph = execute_tool(ctx, "run_posthoc_analysis", {"dataset_name": "multi.csv", "metric": "HV", "method": "auto"})
+    tost = execute_tool(
+        ctx,
+        "run_tost_equivalence",
+        {"dataset_name": "multi.csv", "metric": "HV", "algo_a": "NSGA-II", "algo_b": "MOEA/D", "low_eqbound": 0.05},
+    )
+    bct = execute_tool(
+        ctx,
+        "run_bayesian_correlated_ttest",
+        {"dataset_name": "multi.csv", "metric": "HV", "algo_a": "NSGA-II", "algo_b": "MOEA/D", "rope": 0.01},
+    )
+    forest = execute_tool(ctx, "compute_effect_size_forest", {"dataset_name": "multi.csv", "metric": "HV"})
+
+    if has_v04:
+        assert ph["ok"] is True
+        assert ph["total_pairs"] == 3
+        assert tost["ok"] is True
+        assert "is_equivalent" in tost
+        assert bct["ok"] is True
+        assert abs(bct["p_left"] + bct["p_rope"] + bct["p_right"] - 1.0) < 1e-4
+        assert forest["ok"] is True
+        assert len(forest["items"]) == 2
+
+        ranking = execute_tool(ctx, "run_ranking_analysis", {"dataset_name": "multi.csv", "metric": "HV"})
+        assert ranking["ok"] is True
+        assert "bayesian_plackett_luce" in ranking
+        assert "friedman_aligned" in ranking
+        assert "quade" in ranking
+
+        pl_plot = execute_tool(
+            ctx, "generate_plot", {"dataset_name": "multi.csv", "plot_type": "plackett-luce", "metric": "HV"}
+        )
+        es_plot = execute_tool(
+            ctx, "generate_plot", {"dataset_name": "multi.csv", "plot_type": "effect-size-forest", "metric": "HV"}
+        )
+        assert pl_plot["ok"] is True
+        assert es_plot["ok"] is True
+    else:
+        for res in (ph, tost, bct, forest):
+            assert res["ok"] is False
+            assert "saes >= 2.0.0" in res["error"]
