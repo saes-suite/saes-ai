@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Released]
+
+## [0.4.1] — 2026-11-24 (@rorro6787)
+
+### Changed
+- Updated `.github/workflows/release.yml` to authenticate release stamp pushes and GitHub Releases via the `saes-release-bot` GitHub App (`actions/create-github-app-token@v1`) so protected `main` rulesets remain enforced.
+
 ### Fixed
 - Automatically route default `localhost:11434` Ollama requests to `OLLAMA_HOST` / `http://host.docker.internal:11434` when running inside Docker (`SAES_IN_DOCKER=1` or `/.dockerenv`), and return an accurate host-connectivity status instead of `"Ollama is not installed"` when unreachable from a container.
-
-## [Released]
 
 ## [0.4.0] — 2026-11-24 (@rorro6787)
 
@@ -63,4 +68,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run_ranking_analysis` MCP tool and ranking plot support (`critical-distance`, `bayesian-rank`) in `generate_distribution_plot`.
 - `generate_benchmark_table` and `explore_dataset_distributions` MCP tools for ANOVA/Friedman/Wilcoxon table generation and normality/test recommendation profiling.
 - Global Friedman + Nemenyi CD and Bayesian posterior ranking summaries injected into `build_analysis_context`.
-
