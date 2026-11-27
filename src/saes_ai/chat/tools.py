@@ -1092,10 +1092,262 @@ def _tool_generate_reproducibility(ctx: ToolContext, args: dict[str, Any]) -> di
     }
 
 
+def _get_pareto_collections_dir(ctx: ToolContext) -> Path:
+    import os
+
+    custom = os.getenv("SAES_PARETO_DIR")
+    path = Path(custom).resolve() if custom else (ctx.datasets_dir / "_pareto_collections").resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _import_pareto_plugin() -> Any:
+    try:
+        return importlib.import_module("saes.plugins.pareto")
+    except Exception as exc:
+        raise RuntimeError(
+            "SAES Pareto & EAF plugin (`saes.plugins.pareto`) is not available in this Python environment. "
+            "Upgrade `saes` to >= 2.1.0 to enable Pareto front tools."
+        ) from exc
+
+
+def _load_pareto_collection(ctx: ToolContext, study_name: str) -> Any:
+    pareto = _import_pareto_plugin()
+    cdir = _get_pareto_collections_dir(ctx)
+    clean = Path(study_name.strip()).name.removesuffix(".json")
+    target = cdir / f"{clean}.json"
+    if not target.is_file():
+        available = sorted(p.stem for p in cdir.glob("*.json"))
+        raise FileNotFoundError(
+            f"Pareto study '{study_name}' not found. Available Pareto studies: {available or 'none'}."
+        )
+    return pareto.FrontCollection.model_validate_json(target.read_text(encoding="utf-8"))
+
+
+def _tool_list_pareto_studies(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    pareto = _import_pareto_plugin()
+    cdir = _get_pareto_collections_dir(ctx)
+
+    if bool(args.get("create_demo", False)):
+        demo_name = str(args.get("demo_name", "demo_moo_suite")).strip() or "demo_moo_suite"
+        demo_coll = pareto.create_demo_collection(n_runs=12, seed=42, name=demo_name)
+        (cdir / f"{demo_name}.json").write_text(demo_coll.model_dump_json(), encoding="utf-8")
+
+    items: list[dict[str, Any]] = []
+    for path in sorted(cdir.glob("*.json")):
+        try:
+            coll = pareto.FrontCollection.model_validate_json(path.read_text(encoding="utf-8"))
+            summ = coll.summary()
+            items.append(
+                {
+                    "name": summ.name,
+                    "instances": list(summ.instances),
+                    "algorithms": list(summ.algorithms),
+                    "total_fronts": summ.total_fronts,
+                    "total_points": summ.total_points,
+                    "has_references": len(summ.reference_instances) > 0,
+                }
+            )
+        except Exception:
+            continue
+    return {"count": len(items), "studies": items}
+
+
+def _tool_inspect_pareto_study(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    study_name = str(args.get("study_name", "")).strip()
+    if not study_name:
+        raise ValueError("study_name is required.")
+    coll = _load_pareto_collection(ctx, study_name)
+    return dict(coll.summary().model_dump())
+
+
+def _tool_generate_pareto_plot(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    pareto = _import_pareto_plugin()
+    study_name = str(args.get("study_name", "")).strip()
+    if not study_name:
+        raise ValueError("study_name is required.")
+    coll = _load_pareto_collection(ctx, study_name)
+    summ = coll.summary()
+    instance = str(args.get("instance") or (summ.instances[0] if summ.instances else ""))
+    if instance not in summ.instance_details:
+        raise ValueError(f"Instance '{instance}' not found in '{study_name}'. Available: {list(summ.instances)}")
+
+    meta = summ.instance_details[instance]
+    default_mode = "3d" if meta.n_objectives >= 3 else "attainment"
+    mode = str(args.get("mode", default_mode)).strip().lower()
+    algorithms = args.get("algorithms")
+    algo_a = args.get("algo_a")
+    algo_b = args.get("algo_b")
+    palette = str(args.get("palette", "academic"))
+    show_reference = bool(args.get("show_reference", True))
+    n_permutations = int(args.get("n_permutations", 300))
+
+    fig_plotly = pareto.plot(
+        coll,
+        instance=instance,
+        mode=mode,
+        algorithms=algorithms,
+        algo_a=algo_a,
+        algo_b=algo_b,
+        show_reference=show_reference,
+        n_permutations=n_permutations,
+        palette=palette,
+        interactive=True,
+    )
+    plotly_json = json.loads(fig_plotly.to_json())
+
+    image_data_url: str | None = None
+    try:
+        png_bytes, _, _ = pareto.export_plot(
+            coll,
+            instance=instance,
+            mode=mode,
+            algorithms=algorithms,
+            algo_a=algo_a,
+            algo_b=algo_b,
+            show_reference=show_reference,
+            n_permutations=n_permutations,
+            palette=palette,
+            export_format="png",
+            dpi=150,
+        )
+        image_data_url = f"data:image/png;base64,{base64.b64encode(png_bytes).decode('ascii')}"
+    except Exception:
+        image_data_url = None
+
+    title = f"Pareto {mode.replace('-', ' ').title()} — {instance} ({study_name})"
+    ctx.emit_artifact(
+        {
+            "id": f"pareto_plot_{uuid4().hex[:8]}",
+            "kind": "plot",
+            "plot_type": f"pareto:{mode}",
+            "title": title,
+            "subtitle": f"Study: {study_name} • Instance: {instance}",
+            "filename": study_name,
+            "metric": mode,
+            "instance": instance,
+            "palette": palette,
+            "plotly_figure": plotly_json,
+            "image_data_url": image_data_url,
+            "download_formats": ["png", "svg", "pdf"],
+        }
+    )
+    return {
+        "rendered_inline": True,
+        "study_name": study_name,
+        "instance": instance,
+        "mode": mode,
+        "title": title,
+    }
+
+
+def _tool_run_pareto_eaf_comparison(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    pareto = _import_pareto_plugin()
+    study_name = str(args.get("study_name", "")).strip()
+    if not study_name:
+        raise ValueError("study_name is required.")
+    coll = _load_pareto_collection(ctx, study_name)
+    summ = coll.summary()
+    instance = str(args.get("instance") or (summ.instances[0] if summ.instances else ""))
+    if instance not in summ.instance_details:
+        raise ValueError(f"Instance '{instance}' not found in '{study_name}'. Available: {list(summ.instances)}")
+
+    algs = list(summ.instance_details[instance].algorithms)
+    if len(algs) < 2:
+        raise ValueError(f"Instance '{instance}' needs at least 2 algorithms for EAF comparison.")
+    algo_a = str(args.get("algo_a") or algs[0])
+    algo_b = str(args.get("algo_b") or next((a for a in algs if a != algo_a), algs[1]))
+    n_permutations = int(args.get("n_permutations", 300))
+    alpha = float(args.get("alpha", ctx.alpha))
+
+    diff = pareto.eaf_difference(
+        coll,
+        instance=instance,
+        algo_a=algo_a,
+        algo_b=algo_b,
+        n_permutations=n_permutations,
+        alpha=alpha,
+        seed=42,
+    )
+
+    if bool(args.get("include_plot", True)):
+        _tool_generate_pareto_plot(
+            ctx,
+            {
+                "study_name": study_name,
+                "instance": instance,
+                "mode": "eaf-diff",
+                "algorithms": [algo_a, algo_b],
+                "algo_a": algo_a,
+                "algo_b": algo_b,
+                "n_permutations": n_permutations,
+            },
+        )
+
+    return {
+        "study_name": study_name,
+        "instance": instance,
+        "algo_a": diff.algo_a,
+        "algo_b": diff.algo_b,
+        "n_runs_a": diff.n_runs_a,
+        "n_runs_b": diff.n_runs_b,
+        "ks_statistic": diff.ks_statistic,
+        "p_value": diff.p_value,
+        "alpha": diff.alpha,
+        "is_significant": diff.is_significant,
+        "max_advantage_a": diff.max_advantage_a,
+        "max_advantage_b": diff.max_advantage_b,
+        "area_fraction_a_better": diff.area_fraction_a_better,
+        "area_fraction_b_better": diff.area_fraction_b_better,
+        "interpretation": diff.interpretation,
+    }
+
+
+def _tool_run_pareto_coverage(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    pareto = _import_pareto_plugin()
+    study_name = str(args.get("study_name", "")).strip()
+    if not study_name:
+        raise ValueError("study_name is required.")
+    coll = _load_pareto_collection(ctx, study_name)
+    summ = coll.summary()
+    instance = str(args.get("instance") or (summ.instances[0] if summ.instances else ""))
+    res = pareto.coverage(coll, instance=instance, algorithms=args.get("algorithms"))
+    return dict(res.model_dump())
+
+
+def _tool_extract_pareto_indicators(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
+    study_name = str(args.get("study_name", "")).strip()
+    if not study_name:
+        raise ValueError("study_name is required.")
+    coll = _load_pareto_collection(ctx, study_name)
+    indicators = args.get("indicators") or ["HV", "IGD+", "IGD", "EPS", "Spacing"]
+    raw_fname = str(args.get("dataset_filename") or f"{study_name}_indicators.csv")
+    safe_fname = _sanitize_csv_filename(raw_fname)
+
+    ds = coll.to_indicators_dataset(
+        indicators=list(indicators),
+        instances=args.get("instances"),
+        algorithms=args.get("algorithms"),
+    )
+    out_path = ctx.datasets_dir / safe_fname
+    ds.df.to_csv(out_path, index=False)
+    ctx.active_dataset_name = safe_fname
+    ctx.emit_ui_action({"type": "refresh_datasets"})
+    return {
+        "saved": True,
+        "filename": safe_fname,
+        "row_count": len(ds.df),
+        "algorithms": ds.algorithms,
+        "instances": ds.instances,
+        "metrics": ds.metrics,
+    }
+
+
 def _tool_navigate_ui(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     view = str(args.get("view", "visualize"))
     tab = args.get("tab")
     dataset_name = args.get("dataset_name")
+    pareto_study = args.get("pareto_study")
     alpha = args.get("alpha")
     metric = args.get("metric")
     test_type = args.get("test_type")
@@ -1114,6 +1366,8 @@ def _tool_navigate_ui(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         action["tab"] = tab
     if dataset_name:
         action["dataset_name"] = dataset_name
+    if pareto_study:
+        action["pareto_study"] = str(pareto_study).strip()
     if alpha is not None:
         action["alpha"] = float(alpha)
         ctx.alpha = float(alpha)
@@ -1572,21 +1826,157 @@ SAES_AGENT_TOOLS: list[ToolSpec] = [
         handler=_tool_generate_reproducibility,
     ),
     ToolSpec(
-        name="navigate_ui",
+        name="list_pareto_studies",
         description=(
-            "Navigate the SAES UI when the user explicitly asks to open a view or workspace tab, "
-            "optionally opening a dataset, changing alpha, or pre-configuring the Statistical Workbench."
+            "List all stored multi-objective Pareto front studies available in the SAES Pareto & EAF plugin, "
+            "optionally creating the built-in ZDT1–3 & DTLZ2 demo suite when requested."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "view": {"type": "string", "enum": ["hub", "editor", "visualize"], "description": "Top-level UI view."},
+                "create_demo": {
+                    "type": "boolean",
+                    "description": "Set true only if the user explicitly asks to generate the built-in demo MOO suite.",
+                    "default": False,
+                },
+                "demo_name": {"type": "string", "default": "demo_moo_suite"},
+            },
+            "required": [],
+        },
+        handler=_tool_list_pareto_studies,
+    ),
+    ToolSpec(
+        name="inspect_pareto_study",
+        description=(
+            "Inspect a stored Pareto front study: instances, number of objectives, algorithms, "
+            "run counts per algorithm, and whether reference Pareto fronts are attached."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Name of the stored Pareto front study."},
+            },
+            "required": ["study_name"],
+        },
+        handler=_tool_inspect_pareto_study,
+    ),
+    ToolSpec(
+        name="generate_pareto_plot",
+        description=(
+            "Generate an inline publication-grade Pareto front or Empirical Attainment Function (EAF) plot "
+            "from a stored Pareto study (`attainment`, `runs`, `representative`, `eaf-diff`, `small-multiples`, "
+            "`3d`, or `pcp`)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Name of the stored Pareto front study."},
+                "instance": {"type": "string", "description": "Problem instance (e.g. 'ZDT1', 'DTLZ2')."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["attainment", "runs", "representative", "eaf-diff", "small-multiples", "3d", "pcp"],
+                    "default": "attainment",
+                },
+                "algorithms": {"type": "array", "items": {"type": "string"}},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "show_reference": {"type": "boolean", "default": True},
+                "palette": {"type": "string", "default": "academic"},
+            },
+            "required": ["study_name"],
+        },
+        handler=_tool_generate_pareto_plot,
+    ),
+    ToolSpec(
+        name="run_pareto_eaf_comparison",
+        description=(
+            "Compare two multi-objective algorithms on a 2D problem using exact Empirical Attainment Function "
+            "differences ΔEAF(z) = α_A(z) - α_B(z) and a deterministic KS-EAF permutation hypothesis test, "
+            "optionally rendering the mirrored ΔEAF heatmap inline."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Name of the stored Pareto front study."},
+                "instance": {"type": "string", "description": "2D problem instance name (e.g. 'ZDT1')."},
+                "algo_a": {"type": "string", "description": "First algorithm name."},
+                "algo_b": {"type": "string", "description": "Second algorithm name."},
+                "n_permutations": {"type": "integer", "default": 300},
+                "alpha": {"type": "number", "default": 0.05},
+                "include_plot": {"type": "boolean", "default": True},
+            },
+            "required": ["study_name"],
+        },
+        handler=_tool_run_pareto_eaf_comparison,
+    ),
+    ToolSpec(
+        name="run_pareto_coverage",
+        description=(
+            "Compute Zitzler & Thiele Set Coverage matrix C(A, B) and Best / Median / Worst representative "
+            "runs (ranked by Pareto-compliant IGD+ and HV) for a stored Pareto study instance."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Name of the stored Pareto front study."},
+                "instance": {"type": "string", "description": "Problem instance name."},
+                "algorithms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["study_name"],
+        },
+        handler=_tool_run_pareto_coverage,
+    ),
+    ToolSpec(
+        name="extract_pareto_indicators",
+        description=(
+            "Compute multi-objective quality indicators (HV, IGD+, IGD, EPS, GD, Spacing) from a Pareto front "
+            "study and save them as a canonical 6-column SAES benchmark CSV ready for statistical testing."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Name of the stored Pareto front study."},
+                "dataset_filename": {
+                    "type": "string",
+                    "description": "Target CSV filename (e.g. 'zdt_indicators.csv').",
+                },
+                "indicators": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": ["HV", "IGD+", "IGD", "EPS", "Spacing"],
+                },
+                "instances": {"type": "array", "items": {"type": "string"}},
+                "algorithms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["study_name"],
+        },
+        handler=_tool_extract_pareto_indicators,
+    ),
+    ToolSpec(
+        name="navigate_ui",
+        description=(
+            "Navigate the SAES UI when the user explicitly asks to open a view or workspace tab, "
+            "including Core Benchmarks (`hub`, `editor`, `visualize`), `guide`, or Pareto & EAF "
+            "(`pareto-hub`, `pareto-visualize`)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "view": {
+                    "type": "string",
+                    "enum": ["hub", "editor", "visualize", "guide", "pareto-hub", "pareto-visualize"],
+                    "description": "Top-level UI view.",
+                },
                 "tab": {
                     "type": "string",
                     "enum": ["data", "stats", "charts", "profiles", "power", "reproducibility"],
                     "description": "Workspace tab when view='visualize'.",
                 },
                 "dataset_name": {"type": "string", "description": "Dataset filename to select and open."},
+                "pareto_study": {
+                    "type": "string",
+                    "description": "Pareto front study name to open when view='pareto-visualize'.",
+                },
                 "alpha": {
                     "type": "number",
                     "description": "Update global significance level alpha (e.g. 0.01, 0.05, 0.10).",
