@@ -50,8 +50,21 @@ English if they write in English).
     `scatter`) renders the chart inline in chat with download buttons.
   - `generate_statistical_table` renders publication-grade tables inline in chat with export
     buttons (supports all 13 FWER/FDR adjustments including Shaffer and Bergmann-Hommel).
-- **UI Navigation**: `navigate_ui` (`hub`, `editor`, or `visualize` with tabs `data`, `stats`,
-  `charts`, `profiles`, `power`, `reproducibility`) when the user asks to open a view.
+- **UI Navigation**: `navigate_ui` (`hub`, `editor`, `visualize` with tabs `data`, `stats`,
+  `charts`, `profiles`, `power`, `reproducibility`, plus `guide`, `pareto-hub`, and
+  `pareto-visualize` with optional `pareto_study`) when the user asks to open a view.
+- **Pareto Front & EAF Plugin (`saes.plugins.pareto`)**:
+  - Supports multi-objective front studies across 3 input formats: (1) Multi-File Runs (`FUN.*.tsv`
+    per algorithm + optional `.pf` reference front), (2) Tidy Multi-Run CSV
+    (`algorithm,instance,run_id,f1,f2[,f3...]`, with `algorithm=Reference` promoted to reference
+    front), and (3) jMetal/PlatEMO ZIP archives (`<algo>/<instance>/FUN.<run>.tsv` +
+    `reference_fronts/<instance>.pf`).
+  - Tools: `list_pareto_studies`, `inspect_pareto_study`, `generate_pareto_plot` (`attainment`,
+    `runs`, `representative`, `eaf-diff`, `small-multiples`, `3d`, `pcp`),
+    `run_pareto_eaf_comparison` (exact 2D ΔEAF + KS-EAF permutation test + inline plot),
+    `run_pareto_coverage` (set coverage $C(A,B)$ & best/median/worst runs by IGD+), and
+    `extract_pareto_indicators` (computes `HV`, `IGD+`, `IGD`, `EPS`, `GD`, `Spacing` into a
+    canonical 6-column SAES CSV dataset).
 
 ### Scientific Standards
 - Default to `paired=false` for independent stochastic algorithm runs; pass `paired=true` only when

@@ -292,4 +292,55 @@ SAES_MCP_TOOLS: list[MCPToolSpec] = [
             "required": ["file_path", "metric"],
         },
     ),
+    MCPToolSpec(
+        name="run_pareto_eaf_comparison",
+        description=(
+            "Compare two multi-objective algorithms using exact 2D Empirical Attainment Function "
+            "differences ΔEAF(z) and a deterministic KS-EAF permutation hypothesis test."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string", "description": "Stored Pareto study identifier."},
+                "instance": {"type": "string", "description": "2D problem instance name."},
+                "algo_a": {"type": "string"},
+                "algo_b": {"type": "string"},
+                "n_permutations": {"type": "integer", "default": 300},
+                "alpha": {"type": "number", "default": 0.05},
+            },
+            "required": ["study_name"],
+        },
+    ),
+    MCPToolSpec(
+        name="run_pareto_coverage",
+        description=(
+            "Compute Zitzler & Thiele Set Coverage C(A, B) matrix and Best/Median/Worst representative "
+            "runs (by Pareto-compliant IGD+) for a stored Pareto front study."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string"},
+                "instance": {"type": "string"},
+                "algorithms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["study_name"],
+        },
+    ),
+    MCPToolSpec(
+        name="extract_pareto_indicators",
+        description=(
+            "Extract multi-objective quality indicators (HV, IGD+, IGD, EPS, GD, Spacing) from a Pareto "
+            "front study into a canonical 6-column SAES benchmark CSV."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "study_name": {"type": "string"},
+                "dataset_filename": {"type": "string"},
+                "indicators": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["study_name"],
+        },
+    ),
 ]
