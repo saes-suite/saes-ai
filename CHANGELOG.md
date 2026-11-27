@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Released]
+
+## [0.5.0] — 2026-11-27 (@rorro6787)
+
 ### Added
 - Full conversational assistant and MCP tool parity for the built-in `saes.plugins.pareto` plugin:
   - Added 6 agent tools in `saes_ai.chat.tools`: `list_pareto_studies`, `inspect_pareto_study`, `generate_pareto_plot` (inline Plotly + PNG chat artifacts for `attainment`, `runs`, `representative`, `eaf-diff`, `small-multiples`, `3d`, `pcp`), `run_pareto_eaf_comparison` (exact 2D ΔEAF + KS-EAF permutation test), `run_pareto_coverage` (Set Coverage $C(A, B)$ & representative runs), and `extract_pareto_indicators` (saves canonical SAES CSV and triggers UI dataset refresh).
   - Extended `navigate_ui` and `STATISTICAL_SYSTEM_PROMPT` to support `guide`, `pareto-hub`, and `pareto-visualize` (`pareto_study`) views and explain all 3 Pareto front input formats.
   - Added matching MCP tool specifications (`run_pareto_eaf_comparison`, `run_pareto_coverage`, `extract_pareto_indicators`) in `saes_ai.mcp.tools`.
-
-## [Released]
 
 ## [0.4.1] — 2026-11-24 (@rorro6787)
 
